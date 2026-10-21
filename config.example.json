@@ -1,0 +1,22 @@
+{
+  "jump_testing": {
+    "approved": false,
+    "manufacturer_reference": "",
+    "serial": ""
+  },
+  "vision": {
+    "enabled": false,
+    "auto_start": false,
+    "interpreter": "",
+    "port": 8791,
+    "proc_width": 960,
+    "fps_limit": 60,
+    "model": "",
+    "source": null,
+    "face": false,
+    "face_model": "",
+    "audio": false,
+    "audio_device": "",
+    "stt": false
+  }
+}

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Bertec · Live force data</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+  <script src="/static/protocol.js" defer></script>
+  <script src="/static/training.js" defer></script>
+  <script src="/static/vision.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to measurements</a>
+<header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">B/</span><div>BERTEC <span class="brand-sub">LOCAL FORCE LAB</span></div></div><div class="topbar-right"><span class="local-badge">LOCAL DEVICE · NO CLOUD</span><span class="state-pill" id="connection-state" role="status">Disconnected</span></div></header>
+<main id="main">
+  <h1 class="visually-hidden">Bertec live force data</h1>
+  <div id="error" class="error" role="alert" hidden></div>
+  <div class="tabbar" role="tablist" aria-label="Assessment workspace">
+    <button id="tab-button-plate" class="tab-button is-active" type="button" role="tab" aria-selected="true" aria-controls="tab-plate" data-tab="plate">Plate lab</button>
+    <button id="tab-button-vision" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="tab-vision" data-tab="vision" tabindex="-1">Vision-only</button>
+  </div>
+  <section id="tab-plate" class="tab-panel is-active" role="tabpanel" aria-labelledby="tab-button-plate" tabindex="0">
+  <div class="workspace">
+    <aside class="sidebar" aria-label="Acquisition controls">
+      <section class="panel"><div class="section-heading"><h2>Device connection</h2><span class="step">01</span></div><p id="connection-message" class="muted">Connect to discover a local Bertec device.</p><dl class="device-meta"><div><dt>SDK</dt><dd id="sdk-version">Not loaded</dd></div><div><dt>Last sample</dt><dd id="sample-age">—</dd></div><div><dt>Dashboard link</dt><dd id="transport">Connecting…</dd></div></dl><ul id="devices" class="devices"><li>No device detected</li></ul><div class="button-pair"><button id="connect" class="primary" type="button">Connect / rescan</button><button id="disconnect" type="button" disabled>Disconnect</button></div></section>
+      <section class="panel"><div class="section-heading"><h2>Prepare the plate</h2><span class="step">02</span></div><p class="muted">Remove all load before zeroing. Keep the plate still.</p><label class="check-label"><input id="confirm-unloaded" type="checkbox"> <span>I confirm the plate is unloaded.</span></label><button id="zero" class="full" type="button" disabled>Zero plate</button><p id="zero-message" class="small muted" role="status">Zeroing is unavailable until live data arrives.</p></section>
+      <section class="panel"><div class="section-heading"><h2>Record assessment</h2><span class="step">03</span></div><label for="athlete">Athlete name or ID <span class="muted">(optional)</span></label><input id="athlete" type="text" maxlength="120" autocomplete="off" placeholder="Name or study ID"><p class="small muted">Stored locally with this recording. No phone number needed.</p><div class="record-clock"><span id="record-label">Not recording</span><strong id="duration">—</strong></div><div class="button-pair"><button id="start" class="primary" type="button" disabled>Start recording</button><button id="stop" class="stop" type="button" disabled>Stop</button></div><p id="sample-count" class="small muted">No active recording</p></section>
+      <section class="panel" id="protocol-panel" aria-labelledby="protocol-panel-title"><div class="section-heading"><h2 id="protocol-panel-title">Guided protocols</h2><span class="step">04</span></div><p id="protocol-catalog-status" class="small muted" role="status">Loading protocol catalog…</p><label for="protocol-picker">Protocol</label><select id="protocol-picker" disabled><option value="">Loading…</option></select><p id="protocol-description" class="small muted">Select a protocol to see its conditions and safety notes.</p><div id="protocol-risk-badge" class="risk-badge" role="status" hidden></div><label for="protocol-athlete">Athlete name or ID <span class="muted">(optional)</span></label><input id="protocol-athlete" type="text" maxlength="120" autocomplete="off" placeholder="Name or study ID"><button id="protocol-start" class="primary full" type="button" disabled>Start protocol</button></section>
+      <section class="panel" id="training-panel" aria-labelledby="training-panel-title"><div class="section-heading"><h2 id="training-panel-title">Training modes</h2><span class="step">05</span></div><p id="training-catalog-status" class="small muted" role="status">Loading training catalog…</p><p class="small"><label for="training-mode">Mode</label></p><select id="training-mode" disabled><option value="">Loading…</option></select><p id="training-description" class="small muted">Select a training mode to read its safety notes before starting.</p><div id="training-safety" class="risk-badge" role="alert" hidden></div><div id="training-row-pacing"><p class="small"><label for="training-pacing">Pacing</label></p><select id="training-pacing"><option value="on_demand">On demand (advance when reached)</option><option value="random">Random interval</option><option value="fixed">Fixed interval</option><option value="none">None (operator advances)</option></select></div><div id="training-row-pacing-s"><p class="small"><label for="training-pacing-s">Fixed interval (1-15 s)</label></p><input id="training-pacing-s" type="text" inputmode="decimal" autocomplete="off" placeholder="2"></div><div id="training-row-pacing-min"><p class="small"><label for="training-pacing-min">Random interval, shortest (1-15 s)</label></p><input id="training-pacing-min" type="text" inputmode="decimal" autocomplete="off" placeholder="1"></div><div id="training-row-pacing-max"><p class="small"><label for="training-pacing-max">Random interval, longest (1-15 s)</label></p><input id="training-pacing-max" type="text" inputmode="decimal" autocomplete="off" placeholder="15"></div><div id="training-row-difficulty"><p class="small"><label for="training-difficulty">Difficulty (0.25-1.00 of full-scale)</label></p><input id="training-difficulty" type="text" inputmode="decimal" autocomplete="off" placeholder="1.00"></div><div id="training-row-random-targets"><label class="check-label"><input id="training-random-targets" type="checkbox"> <span>Random target order</span></label></div><div id="training-row-duration"><p class="small"><label for="training-duration-s">Session length in seconds (blank = operator stops)</label></p><input id="training-duration-s" type="text" inputmode="decimal" autocomplete="off" placeholder="operator stops"></div><p class="small"><label for="training-athlete">Athlete name or ID <span class="muted">(optional)</span></label></p><input id="training-athlete" type="text" maxlength="120" autocomplete="off" placeholder="Name or study ID"><button id="training-start" class="primary full" type="button" disabled>Start training</button></section>
+      <section class="panel" id="vision-controls" aria-labelledby="vision-controls-title"><div class="section-heading"><h2 id="vision-controls-title">Camera / vision</h2><span class="step">06</span></div><p class="small muted">Optional markerless pose capture. Frames stay on this device; nothing is uploaded.</p><label for="vision-source">Source</label><select id="vision-source"><option value="usb">USB camera</option><option value="url">Camera URL</option><option value="file">Video file</option></select><div id="vision-usb"><p class="small"><label for="vision-index">Camera index (0 = first device)</label></p><input id="vision-index" type="number" min="0" step="1" inputmode="numeric" value="1"></div><div id="vision-url" hidden><p class="small"><label for="vision-url-input">Camera stream URL</label></p><input id="vision-url-input" type="text" autocomplete="off" placeholder="rtsp://camera.local/stream"></div><div id="vision-file-block" hidden><p class="small"><label for="vision-file">Video file path (local)</label></p><input id="vision-file" type="text" autocomplete="off" placeholder="C:\videos\stance.mp4"></div><div class="vision-options">
+          <p class="metric-label vision-options-title">OPTIONAL LANES — OFF UNLESS ENABLED WITH CONSENT</p>
+          <label class="check-label consent-label"><input id="vision-consent" type="checkbox" required aria-required="true" aria-describedby="vision-consent-note vision-consent-state"> <span>Patient/athlete consent for microphone and face analysis</span></label>
+          <label class="check-label"><input id="vision-audio" type="checkbox" disabled> <span>Microphone — local acoustic features + keyword flags</span></label>
+          <label class="check-label"><input id="vision-stt" type="checkbox" disabled> <span>Local speech-to-text (offline Whisper model)</span></label>
+          <label class="check-label"><input id="vision-face-enable" type="checkbox" disabled> <span>Face expression proxies (front camera only)</span></label>
+        </div>
+        <p id="vision-consent-note" class="small muted vision-consent-note">Audio is off unless enabled with consent; transcripts are stored locally as text.</p>
+        <p id="vision-consent-state" class="small muted vision-consent-state" role="status">Consent not given — microphone, speech-to-text and face analysis are sent as off.</p>
+        <div class="button-pair"><button id="vision-start" class="primary" type="button">Start vision</button><button id="vision-stop" type="button" disabled>Stop vision</button></div><p id="vision-status" class="small muted" role="status">Camera stopped</p><div class="vision-live" aria-label="Camera audio and expression proxies"><div class="vision-live-head"><span class="metric-label">AUDIO</span><span id="vision-audio-dbfs" class="small muted">— dBFS</span></div><div class="vision-level" role="img" aria-label="Microphone level meter"><div id="vision-audio-level" class="vision-level-fill"></div></div><p class="vision-live-line"><span>pitch <strong id="vision-pitch">—</strong></span><span>speech <strong id="vision-speech">—</strong></span><span>STT <strong id="vision-stt-state">—</strong></span></p><p id="vision-stt-text" class="vision-live-line">—</p><p id="vision-audio-flags" class="vision-live-line">flags —</p><p id="vision-face"><span class="vision-face-label">expression proxies (not pain detection)</span><span id="vision-face-values"> · mouth — · brow — · squint —</span></p></div></section>
+    </aside>
+    <div class="assessment">
+      <section class="panel signal-panel" aria-labelledby="signal-title"><div class="section-heading"><div><p class="eyebrow">LIVE SIGNAL</p><h2 id="signal-title">Vertical ground reaction force</h2></div><span class="legend"><i aria-hidden="true"></i>Total Fz</span></div><div class="signal-summary"><div><span class="metric-label">TOTAL FORCE</span><div class="hero-value"><strong id="fz">—</strong><span>N</span></div></div><div class="phase-block"><span class="metric-label">BASELINE / PHASE</span><strong id="phase">Awaiting data</strong><span id="quality" class="small muted">No samples received</span></div></div><div class="chart-wrap"><canvas id="force-chart" role="img" aria-label="Total vertical force in newtons against time in seconds. No samples available.">Force-time chart. Current force is available as text above.</canvas><div id="chart-empty" class="chart-empty"><strong>Waiting for a measured signal</strong><span>Connect the plate to view force over time.</span></div></div><div class="chart-footer"><span id="trace-status">No trace available</span><span>Time (s) · Force (N)</span></div></section>
+      <section class="metrics" aria-label="Assessment measurements">
+        <article class="panel metric"><h3>Body weight · measured Fz ÷ g</h3><div><strong id="mass">—</strong><span>kg</span></div><p id="weight-detail">Requires a zeroed plate and 2 s of still standing.</p></article>
+        <article class="panel metric"><h3>Peak force</h3><div><strong id="peak-force">—</strong><span>N</span></div><p>Measured vertical force</p></article>
+        <article class="panel metric guarded"><h3>Estimated live power</h3><div><strong id="power">—</strong><span>W</span></div><p class="jump-note">Jump analysis locked</p></article>
+        <article class="panel metric guarded"><h3>Last-jump peak power</h3><div><strong id="peak-power">—</strong><span>W</span></div><p class="jump-note">Jump analysis locked</p></article>
+        <article class="panel metric guarded"><h3>Jump height</h3><div><strong id="jump-height">—</strong><span>cm</span></div><p class="jump-note">Jump analysis locked</p></article>
+        <article class="panel metric guarded"><h3>Flight time</h3><div><strong id="flight-time">—</strong><span>ms</span></div><p class="jump-note">Jump analysis locked</p></article>
+        <article class="panel metric guarded"><h3>Jumps in this set</h3><div><strong id="jump-count">—</strong><span>reps</span></div><p class="jump-note">Jump analysis locked</p></article>
+      </section>
+      <section id="split-loads" class="panel split-loads" aria-label="Reported left and right loads" hidden><div id="left-block"><span>Left load</span><strong id="left-load">—</strong><span>N</span></div><div id="right-block"><span>Right load</span><strong id="right-load">—</strong><span>N</span></div><p class="small muted">Displayed only when separate loads are supplied by the device.</p></section>
+      <section class="panel protocol-session" id="protocol-session" aria-labelledby="protocol-session-title"><div class="section-heading"><div><p class="eyebrow">GUIDED PROTOCOL</p><h2 id="protocol-session-title">Protocol session</h2></div><span id="protocol-status" class="state-pill" role="status">No session</span></div><div id="spotter-badge" class="risk-badge" role="alert" hidden></div><div class="protocol-current"><strong id="protocol-condition">No active protocol session</strong><p id="protocol-guidance" class="small muted">Start a protocol from the sidebar to begin guided trials.</p><p id="protocol-progress" class="small muted">Trial progress unavailable.</p></div><p id="protocol-summary" class="small muted" hidden></p><div class="protocol-actions"><button id="protocol-begin" type="button" disabled>Begin trial</button><button id="protocol-end" type="button" disabled>End trial</button><button id="protocol-keep" class="primary" type="button" disabled>Keep trial</button><button id="protocol-discard" type="button" disabled>Discard trial</button><button id="protocol-repeat" type="button" disabled>Repeat trial</button><button id="protocol-skip" type="button" disabled>Skip condition</button><button id="protocol-note" type="button" disabled>Add note</button><button id="protocol-close" class="stop" type="button" disabled>Close session</button></div><p id="protocol-message" class="small muted" role="status">Protocol controls are unavailable until a catalog loads.</p></section>
+      <section class="panel" id="training-session" aria-labelledby="training-session-title"><div class="section-heading"><div><p class="eyebrow">TRAINING SESSION</p><h2 id="training-session-title">Target zone</h2></div><span id="training-status" class="state-pill" role="status">No session</span></div><div id="training-quality" class="risk-badge" role="alert" hidden></div><div class="protocol-current"><strong id="training-target">No active training session</strong><p id="training-guidance" class="small muted">Start a training mode from the sidebar to begin.</p><p id="training-progress" class="small muted">Target progress unavailable.</p><p id="training-zone" class="small muted">Zone status unavailable.</p></div><div class="cop-wrap"><canvas id="training-canvas" role="img" aria-label="Training target zone and centre of pressure. Waiting for a training session.">Training target zone view; live values are available as text.</canvas></div><div class="cop-moments"><span class="metric-label">COMPLIANCE</span><strong id="training-compliance">—</strong><span id="training-score" class="small muted">No score yet.</span></div><p id="training-summary" class="small muted" hidden></p><div class="protocol-actions"><button id="training-stop" class="stop" type="button" disabled>Stop and store</button><button id="training-advance" type="button" disabled>Next target</button><button id="training-hit" type="button" disabled>Mark reached</button></div><p id="training-message" class="small muted" role="status">Training controls are unavailable until a catalog loads.</p><p id="training-zero-note" class="small muted" hidden>Absolute scores trust requires operator zero.</p></section>
+      <section class="panel" id="cop-panel" aria-labelledby="cop-title"><div class="section-heading"><div><p class="eyebrow">BALANCE SIGNAL</p><h2 id="cop-title">Live centre of pressure</h2></div><span id="cop-status" class="small muted" role="status">COP: waiting for valid samples (plate unloaded / below 20 N gate)</span></div><div class="cop-wrap"><canvas id="cop-chart" role="img" aria-label="Centre of pressure in millimetres. Waiting for valid samples (plate unloaded / below 20 N gate).">Centre of pressure view; current values are available as text below.</canvas></div><div class="cop-moments"><span class="metric-label">MOMENTS</span><span>mx <strong id="moment-mx">—</strong> N·m</span><span>my <strong id="moment-my">—</strong> N·m</span><span class="small muted">Raw plate moments</span></div><p id="zero-note" class="small muted" hidden>Requires operator zero for absolute values.</p></section>
+      <section class="panel vision-panel" id="vision-panel" aria-labelledby="vision-panel-title">
+        <div class="section-heading"><div><p class="eyebrow">JOINT TRACKING (CAMERA)</p><h2 id="vision-panel-title">Markerless pose estimates</h2></div><span id="vision-feed-state" class="small muted" role="status">Camera stopped</span></div>
+        <div class="vision-feed-wrap"><img id="vision-feed" alt="camera pose feed" hidden><p id="vision-feed-empty" class="small muted">Start the camera from the sidebar to view the pose feed.</p></div>
+        <div class="vision-metrics" aria-label="Camera pose estimates">
+          <div><span class="metric-label">TRUNK LEAN</span><strong id="vision-trunk">—</strong><span class="vision-unit">deg</span></div>
+          <div><span class="metric-label">SWAY X</span><strong id="vision-sway-x">—</strong><span class="vision-unit" title="Relative trunk sway against the rolling baseline, as a percentage of on-screen body height">% ht</span></div>
+          <div><span class="metric-label">SWAY Y</span><strong id="vision-sway-y">—</strong><span class="vision-unit" title="Relative trunk sway against the rolling baseline, as a percentage of on-screen body height">% ht</span></div>
+          <div><span class="metric-label">PELVIC TILT</span><strong id="vision-pelvic">—</strong><span class="vision-unit">deg</span></div>
+          <div><span class="metric-label">KNEE L</span><strong id="vision-knee-l">—</strong><span class="vision-unit">deg</span></div>
+          <div><span class="metric-label">KNEE R</span><strong id="vision-knee-r">—</strong><span class="vision-unit">deg</span></div>
+          <div><span class="metric-label">POSE COVERAGE</span><strong id="vision-coverage">—</strong><span class="vision-unit">%</span></div>
+        </div>
+        <p class="vision-note small muted">markerless estimates — not clinical goniometry; camera explains how the COP moved, it does not measure it</p>
+        <p id="vision-error" class="vision-error small" role="alert" hidden></p>
+      </section>
+      <section class="panel sessions-panel" aria-labelledby="sessions-title"><div class="section-heading"><div><p class="eyebrow">LOCAL ARCHIVE</p><h2 id="sessions-title">Recorded sessions</h2></div><button id="refresh-sessions" type="button">Refresh</button></div><div id="sessions"><p class="empty-session">No saved sessions loaded.</p></div></section>
+      <section class="panel" id="protocol-reports-panel" aria-labelledby="protocol-reports-title"><div class="section-heading"><div><p class="eyebrow">PROTOCOL REPORTS</p><h2 id="protocol-reports-title">Session reports</h2></div><button id="protocol-reports-refresh" type="button">Refresh</button></div><p class="small muted">Every closed guided-protocol session is stored locally with a printable report (research aid; not a medical device).</p><p id="protocol-reports-status" class="small muted" role="status">Loading stored protocol sessions…</p><div id="protocol-reports"><p class="empty-session">No stored protocol sessions yet.</p></div></section>
+    </div>
+  </div>
+  </section>
+  <section id="tab-vision" class="tab-panel vision-only" role="tabpanel" aria-labelledby="tab-button-vision" tabindex="0">
+    <div class="vision-only-head"><div><p class="eyebrow">VISION-ONLY ASSESSMENT</p><h2>Camera-only movement screen</h2></div><span id="vision2-state" class="state-pill" role="status">Camera stopped</span></div>
+    <p class="small muted vision-only-intro">No plate required. Pose and microphone cues are processed on this device and never uploaded. Research aid — not a medical device, and expression proxies are not pain detection.</p>
+    <div class="vision-only-grid">
+      <div class="vision-col">
+        <section class="panel" id="vision-guide" aria-labelledby="vision-guide-title">
+          <div class="section-heading"><div><p class="eyebrow">GUIDED ASSESSMENT</p><h2 id="vision-guide-title">Tests for the selected views</h2></div><span class="step">V1</span></div>
+          <p id="vision-guide-status" class="small muted" role="status">Loading the vision-only guide…</p>
+          <div class="vision-view-picker"><span class="metric-label">CAMERA VIEWS</span><label class="check-label"><input id="vision-guide-side" type="checkbox" checked> <span>Side</span></label><label class="check-label"><input id="vision-guide-front" type="checkbox" checked> <span>Front</span></label><button id="vision-guide-refresh" type="button">Reload guide</button></div>
+          <div id="vision-guide-tests" class="guide-tests"><p class="empty-session">No guide loaded yet.</p></div>
+        </section>
+        <section class="panel" id="vision-session-panel" aria-labelledby="vision-session-title">
+          <div class="section-heading"><div><p class="eyebrow">SESSION</p><h2 id="vision-session-title">Vision-only session</h2></div><div class="vision-session-head"><span id="vision-session-status" class="state-pill" role="status">No session</span><span id="vision-segment-status" class="small muted" role="status">No active segment</span></div></div>
+          <form id="vision-session-form" novalidate>
+            <label for="vision-session-label">Session label</label>
+            <input id="vision-session-label" type="text" maxlength="120" autocomplete="off" required placeholder="e.g. Single-leg stance, day 1">
+            <div class="vision-form-row">
+              <div><label for="vision-session-age">Age <span class="muted">(optional)</span></label><input id="vision-session-age" type="number" min="0" max="120" step="1" inputmode="numeric"></div>
+              <div><label for="vision-session-sex">Sex <span class="muted">(optional)</span></label><select id="vision-session-sex"><option value="">Unspecified</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></div>
+            </div>
+            <label for="vision-session-view">Camera view</label>
+            <select id="vision-session-view"><option value="side">Side</option><option value="front">Front</option><option value="oblique+front">Oblique + front</option></select>
+            <label for="vision-session-notes">Notes <span class="muted">(optional)</span></label>
+            <input id="vision-session-notes" type="text" maxlength="500" autocomplete="off" placeholder="Setup or context">
+            <label class="check-label consent-label vision-session-consent"><input id="vision-session-consent" type="checkbox" required aria-required="true" aria-describedby="vision-session-consent-note vision-session-consent-state"> <span>Patient/athlete consent for microphone and face analysis</span></label>
+            <p id="vision-session-consent-note" class="small muted">Audio is off unless enabled with consent; transcripts are stored locally as text.</p>
+            <p id="vision-session-consent-state" class="small muted vision-consent-state" role="status">Consent not given — this session records audio, speech-to-text and face as off.</p>
+            <div class="button-pair vision-session-actions"><button id="vision-session-start" class="primary" type="submit">Start vision session</button><button id="vision-session-stop" type="button" disabled>Stop session</button></div>
+            <p id="vision-session-error" class="vision-error small" role="alert" hidden></p>
+          </form>
+          <div class="vision-segment-box" id="vision-segment-box">
+            <div class="section-heading"><div><p class="eyebrow">TEST SEGMENT</p><h3 id="vision-segment-title">Mark the running test</h3></div><span class="step">V2</span></div>
+            <div class="vision-form-row">
+              <div><label for="vision-test-select">Test</label><select id="vision-test-select"><option value="">Select a test…</option></select></div>
+              <div><label for="vision-limb-select">Limb <span class="muted">(optional)</span></label><select id="vision-limb-select"><option value="">Not specified</option><option value="left">Left</option><option value="right">Right</option><option value="both">Both</option></select></div>
+            </div>
+            <div class="vision-form-row">
+              <div><label for="vision-trial">Trial <span class="muted">(optional)</span></label><input id="vision-trial" type="number" min="1" max="999" step="1" inputmode="numeric"></div>
+              <div class="vision-segment-action"><button id="vision-segment-start" type="button" disabled>Start test segment</button></div>
+            </div>
+            <p class="small muted vision-segment-help">Choose a test from the guide; each segment is summarised separately on the report.</p>
+            <p id="vision-segment-error" class="vision-error small" role="alert" hidden></p>
+          </div>
+        </section>
+        <section class="panel sessions-panel" id="vision-sessions-panel" aria-labelledby="vision-sessions-title">
+          <div class="section-heading"><div><p class="eyebrow">VISION ARCHIVE</p><h2 id="vision-sessions-title">Vision-only sessions</h2></div><button id="vision-sessions-refresh" type="button">Refresh</button></div>
+          <p class="small muted">Each session is stored locally with its observations and a printable report.</p>
+          <p id="vision-sessions-status" class="small muted" role="status">Loading stored vision-only sessions…</p>
+          <div id="vision-sessions"><p class="empty-session">No vision-only sessions stored yet.</p></div>
+        </section>
+      </div>
+      <div class="vision-col">
+        <section class="panel vision-panel" id="vision2-live" aria-labelledby="vision2-live-title">
+          <div class="section-heading"><div><p class="eyebrow">LIVE CAMERA</p><h2 id="vision2-live-title">Vision-only feed and pose</h2></div><span id="vision2-feed-state" class="small muted" role="status">Camera stopped</span></div>
+          <div class="vision-feed-wrap"><img id="vision2-feed" alt="vision-only camera pose feed" hidden><p id="vision2-feed-empty" class="small muted">Start the camera in the Plate lab sidebar (06 Camera / vision), then return here.</p></div>
+          <div class="vision-metrics" aria-label="Vision-only pose estimates">
+            <div><span class="metric-label">TRUNK LEAN</span><strong id="vision2-trunk">—</strong><span class="vision-unit">deg</span></div>
+            <div><span class="metric-label">SWAY X</span><strong id="vision2-sway-x">—</strong><span class="vision-unit" title="Relative trunk sway against the rolling baseline, as a percentage of on-screen body height">% ht</span></div>
+            <div><span class="metric-label">SWAY Y</span><strong id="vision2-sway-y">—</strong><span class="vision-unit" title="Relative trunk sway against the rolling baseline, as a percentage of on-screen body height">% ht</span></div>
+            <div><span class="metric-label">PELVIC TILT</span><strong id="vision2-pelvic">—</strong><span class="vision-unit">deg</span></div>
+            <div><span class="metric-label">KNEE L</span><strong id="vision2-knee-l">—</strong><span class="vision-unit">deg</span></div>
+            <div><span class="metric-label">KNEE R</span><strong id="vision2-knee-r">—</strong><span class="vision-unit">deg</span></div>
+            <div><span class="metric-label">POSE COVERAGE</span><strong id="vision2-coverage">—</strong><span class="vision-unit">%</span></div>
+          </div>
+          <p class="vision-note small muted">markerless estimates — not clinical goniometry; face and voice cues are expression proxies, not pain detection</p>
+          <p id="vision2-model" class="small muted">pose model —</p>
+          <p id="vision2-error" class="vision-error small" role="alert" hidden></p>
+        </section>
+        <section class="panel" id="vision-events-panel" aria-labelledby="vision-events-title">
+          <div class="section-heading"><div><p class="eyebrow">OBSERVATION LOG</p><h2 id="vision-events-title">Live observations</h2></div><span class="step">V3</span></div>
+          <div class="vision-mark-row" role="group" aria-label="Operator marks"><button id="vision-mark-pain" type="button">Pain</button><button id="vision-mark-did-not-understand" type="button">Didn't understand</button><button id="vision-mark-note" type="button">Note</button></div>
+          <label for="vision-mark-note-text">Note text <span class="muted">(used by Note)</span></label>
+          <input id="vision-mark-note-text" type="text" maxlength="500" autocomplete="off" placeholder="Optional note">
+          <p id="vision-mark-status" class="small muted" role="status">Marks are stored on this device with the current session.</p>
+          <ol id="vision-events" class="event-log" aria-live="polite" aria-relevant="additions"><li class="event event-empty">No observations yet.</li></ol>
+          <p class="small muted">Newest first. Severity colours come from the camera worker and operator marks.</p>
+        </section>
+      </div>
+    </div>
+  </section>
+  <footer>LOCAL ACQUISITION <span>Estimates require a valid baseline. An empty value is not zero.</span></footer>
+</main>
+<noscript>This dashboard requires JavaScript to communicate with the local acquisition service. No data is displayed.</noscript>
+</body>
+</html>

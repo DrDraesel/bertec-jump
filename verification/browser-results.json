@@ -1,0 +1,45 @@
+{
+  "page_errors": [],
+  "websocket": "connected",
+  "desktop": "1440x1100",
+  "mobile": "390x844",
+  "connect_disconnect_readback": "passed",
+  "real_status": {
+    "connection": {
+      "state": "waiting",
+      "message": "No Bertec devices found. Connect USB, verify power and the Bertec USB driver.",
+      "sdk_version": "2.57",
+      "devices": [],
+      "last_sample_age_s": null,
+      "zeroed": false
+    },
+    "safety": {
+      "jump_enabled": false,
+      "message": "BP5046 is a balance plate. The documented 227 kg patient-weight limit is not a jump-impact rating. Do not jump until Bertec confirms this exact unit is suitable and specifies safe impact loads. Jump/power metrics are locked by default. Research software; not a validated clinical device."
+    },
+    "recording": {
+      "active": false,
+      "id": null,
+      "athlete": "",
+      "duration_s": 0,
+      "sample_count": 0
+    },
+    "analysis": {
+      "phase": "baseline",
+      "mass_kg": null,
+      "fz_n": null,
+      "left_n": null,
+      "right_n": null,
+      "velocity_m_s": null,
+      "power_w": null,
+      "peak_power_w": null,
+      "peak_force_n": null,
+      "jump_height_cm": null,
+      "flight_time_ms": null,
+      "jump_count": 0,
+      "quality": "Zero the completely unloaded plate before measuring."
+    },
+    "trace": [],
+    "sessions": []
+  }
+}

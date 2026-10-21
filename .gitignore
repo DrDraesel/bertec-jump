@@ -1,0 +1,24 @@
+# Local runtime data and machine-specific configuration (never commit)
+data/
+config.json
+*.tmp
+
+# Vendor SDK materials (Bertec licence — do not redistribute)
+vendor/
+sdk.zip
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Models (large binaries, downloaded separately)
+models/
+
+# Logs / OS noise
+*.log
+Thumbs.db
+.DS_Store
+*.bak

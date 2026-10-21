@@ -1,0 +1,37 @@
+{
+  "record_id": "20260924T182031_75325601",
+  "samples": 5044,
+  "wall_seconds": 5.030999999999949,
+  "recorded_seconds": 5.042999999999999,
+  "mean_force_n": 0.007443675344468675,
+  "min_force_n": -0.294921875,
+  "max_force_n": 0.255859375,
+  "continuous_frames": true,
+  "csv_report_readback": "passed",
+  "browser_errors": [],
+  "websocket": "connected",
+  "mobile_overflow": false,
+  "final_connection": {
+    "state": "streaming",
+    "message": "Live calibrated force data from Bertec USB.",
+    "sdk_version": "2.57",
+    "devices": [
+      {
+        "index": 0,
+        "serial": "00000000-S017620",
+        "model": "AM6147-E",
+        "sample_rate": 1000,
+        "channels": [
+          "Fz",
+          "Mx",
+          "My"
+        ],
+        "firmware": 1101,
+        "has_hardware_timestamp": false,
+        "timestamp_hz": 1000
+      }
+    ],
+    "last_sample_age_s": 0.0,
+    "zeroed": true
+  }
+}
