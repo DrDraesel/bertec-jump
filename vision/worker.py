@@ -871,6 +871,15 @@ def _parent_alive(pid):
         SYNCHRONIZE = 0x00100000
         WAIT_TIMEOUT = 0x102
         kernel32 = ctypes.windll.kernel32
+        # 64-bit-safe signatures: without restype, a handle can be truncated.
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_bool,
+                                         ctypes.c_uint32]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p,
+                                                 ctypes.c_uint32]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_bool
         handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
         if not handle:
             # ERROR_INVALID_PARAMETER (87) = no such process -> dead.

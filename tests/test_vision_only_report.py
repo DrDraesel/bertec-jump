@@ -206,7 +206,9 @@ class TestPartialAndEmpty(unittest.TestCase):
             self.assertIn('<h2>{}</h2>'.format(heading), html)
         self.assertIn('<td>Frames processed</td><td class="num">600</td>',
                       html)
-        self.assertIn('No audio was recorded for this session', html)
+        # H3 residual: a session without any audio key must not imply audio was
+        # recorded; the page states that no audio data is stored.
+        self.assertIn('No audio data is stored', html)
         self.assertIn('No face data was recorded for this session', html)
         self.assertIn('No automatic observations were logged', html)
         self.assertIn('No operator marks were recorded', html)

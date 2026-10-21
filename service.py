@@ -677,6 +677,21 @@ def _audio_aggregate(rows):
     }
 
 
+def _face_visible(face):
+    """True when the worker actually detected a face.
+
+    The worker emits ``visible`` as a FLOAT presence proxy (1.0 = a full face
+    mesh came back, 0.0 = none); older fixtures/tests use booleans.  Accept
+    either and require a positive value.  An earlier `is True` check rejected
+    the worker's 1.0 and reported zero faces for every real session.
+    """
+    value = face.get('visible')
+    if isinstance(value, bool):
+        return value
+    number = _finite_number(value)
+    return number is not None and number > 0.5
+
+
 def _face_aggregate(rows):
     """Face-proxy summary from stored rows (H3); proxies, never a pain score."""
     rows = [row for row in (rows or []) if isinstance(row, dict)]
@@ -688,10 +703,9 @@ def _face_aggregate(rows):
         if not isinstance(face, dict) or not face:
             continue
         present += 1
-        # The worker always emits a face block (visible False when nobody is
-        # detected).  Counting the block as a visible face reported 100 %
-        # 'visible' on empty footage - only a literal True is a detection.
-        if face.get('visible') is not True:
+        # The worker always emits a face block; only a positive presence
+        # proxy (1.0) is a detection.  Never count the block itself.
+        if not _face_visible(face):
             continue
         visible += 1
         for key in VISION_FACE_PROXIES:
@@ -2018,11 +2032,24 @@ class Acquisition:
         # until the microphone/face lanes match what the operator allowed.
         # The pre-session flags are remembered so stop() can close them again:
         # the microphone is session-scoped, never app-lifetime (M8).
-        self._vision_flags_before_session = dict(self._vision_flags_applied)
+        before_flags = dict(self._vision_flags_applied)
+        self._vision_flags_before_session = before_flags
         self._vision_ensure_flags(**consent_flags)
-        session_id = self.vision_store.create(label, age=age, sex=sex,
-                                              view=view, notes=notes,
-                                              consent=consent_flags)
+        try:
+            session_id = self.vision_store.create(label, age=age, sex=sex,
+                                                  view=view, notes=notes,
+                                                  consent=consent_flags)
+        except Exception:
+            # A failed session must not leave the microphone open without a
+            # folder: restore the pre-session lanes, then re-raise.
+            try:
+                self._vision_ensure_flags(
+                    **{key: bool(before_flags.get(key))
+                       for key in ('audio', 'stt', 'face')})
+            except Exception:
+                pass
+            self._vision_flags_before_session = None
+            raise
         document = self.vision_store.get(session_id) or {}
         segments = document.get('segments')
         segments = ([segment for segment in segments
@@ -2141,6 +2168,9 @@ class Acquisition:
                 summary['face'] = _face_aggregate(rows)
             # H7: one summary per test segment (never one mean for the battery).
             summary['segments'] = self._vision_segment_summaries(rows)
+            recorded_segments = list(self._vision_only_segments or [])
+            summary['segments_recorded'] = len(recorded_segments)
+            summary['segments_summarised'] = len(summary['segments'])
             if not rows and not summary.get('notes'):
                 # An empty clip is reported as such, never as a clean capture.
                 summary['notes'] = ['insufficient frames']
@@ -2153,6 +2183,15 @@ class Acquisition:
             document = (self.vision_store.finish(session_id, summary)
                         if self.vision_store is not None else None)
         except Exception as exc:
+            # A failed finish must not leave the microphone open: the session
+            # is gone, so its consent ends with it (M8).
+            if restore is not None:
+                try:
+                    target = dict(restore)
+                    target['face'] = self._vision_flags_applied.get('face', False)
+                    self._vision_ensure_flags(**target)
+                except Exception:
+                    pass
             self._vision_last_error = 'vision-only finish failed: %s' % exc
             raise RuntimeError('vision-only session %s could not be stored: %s'
                                % (session_id, exc)) from exc
@@ -2329,10 +2368,11 @@ class Acquisition:
             face = frame.get('face')
             model = frame.get('model')
             segment = self._vision_only_segment or {}
+            frame_rel = self._vision_only_rel_time(record.get('t_mono_ms'))
             payload = {
                 'frame_id': record.get('frame_id'),
                 't_mono_ms': record.get('t_mono_ms'),
-                't_rel': self._vision_only_rel_time(record.get('t_mono_ms')),
+                't_rel': frame_rel,
                 'pose_found': bool(record.get('pose_found')),
                 'fps': record.get('fps'),
                 'model': model if isinstance(model, dict) else None,
@@ -2356,8 +2396,12 @@ class Acquisition:
             else:
                 self._vision_only_dropped += 1
             for event in events:
-                self.vision_store.append_event(session_id,
-                                               {**event, 'source': 'frame'})
+                record_event = {**event, 'source': 'frame'}
+                # M6: automatic frame events share the frame's session clock;
+                # wall-clock-only events could not be aligned with the rows.
+                if frame_rel is not None and record_event.get('t_rel') is None:
+                    record_event['t_rel'] = frame_rel
+                self.vision_store.append_event(session_id, record_event)
             return True
         except Exception as exc:
             self._vision_last_error = 'vision-only frame rejected: %s' % exc

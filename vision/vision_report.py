@@ -577,8 +577,9 @@ def _merge_face(payloads):
             number = _number(value)
             if number is None:
                 continue
-            if key in ('frames_visible', 'frames'):
-                continue
+            if key in ('frames_visible', 'frames', 'frames_total',
+                       'frames_with_face_data', 'visible_pct', 'recorded'):
+                continue  # aggregate bookkeeping, not a face proxy
             if key.startswith('max_'):
                 maxima[key] = number if key not in maxima \
                     else max(maxima[key], number)
@@ -793,7 +794,8 @@ def _session_observations(session, collected):
                 _esc(', '.join(states))))
         elif excerpts:
             items.append('Speech-to-text: local transcript present')
-        flags = audio.get('flag_counts') or {}
+        flags = {label: count for label, count in (audio.get('flag_counts') or {}).items()
+                 if (_number(count) or 0) > 0}
         if flags:
             items.append('Keyword matches (local STT, may be wrong): {}'.format(
                 _esc(', '.join('{} x{}'.format(_flag_label(label),
@@ -901,6 +903,7 @@ def _meta_list(collected):
                      'is not the age of the photo)</li>'
                      .format(max(latencies)))
 
+    sync_seen = False
     for _trial, summary in collected:
         sync = summary.get('sync')
         if not isinstance(sync, dict):
@@ -922,7 +925,13 @@ def _meta_list(collected):
         if bits:
             items.append('<li>Camera-plate sync: {} (software alignment, not '
                          'hardware genlock)</li>'.format(_esc(', '.join(bits))))
+            sync_seen = True
             break
+    if not sync_seen:
+        # M3: never silently drop the sync statement - saying it was not
+        # measured is the honest line, and it distinguishes camera-only runs.
+        items.append('<li>Camera-plate sync: not measured (independent '
+                     'clocks; no hardware genlock)</li>')
 
     return ('<ul class="vision-meta">\n' + '\n'.join(items) + '\n</ul>')
 
@@ -1157,6 +1166,22 @@ def _table_notes(collected):
                      'unreliable - read the plate metrics instead.</p>'
                      .format(len(weak), len(collected),
                              _esc(', '.join(weak))))
+
+    sway_baseline = None
+    sway_totals = []
+    for _trial, summary in collected:
+        value = _number(summary.get('sway_baseline_s'))
+        if value is not None:
+            sway_baseline = value
+        total_x = _number(summary.get('trunk_x_range'))
+        total_y = _number(summary.get('trunk_y_range'))
+        if total_x is not None or total_y is not None:
+            sway_totals.append((total_x, total_y))
+    if sway_baseline is not None:
+        parts.append('<p class="vision-note">Trunk-sway ranges are the residual '
+                     'after a {:.1f} s rolling baseline (time-based, so the camera '
+                     'rate does not change the window); total ranges are shown '
+                     'where the worker stored them.</p>'.format(sway_baseline))
 
     flag_items = []
     for (trial, summary), label in zip(collected,

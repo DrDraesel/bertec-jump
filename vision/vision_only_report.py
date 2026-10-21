@@ -317,10 +317,8 @@ def _kinematics(summary):
         'angles show a static RMSE of 15.49 deg and an ICC of 0.136 during '
         'single-leg stance, so quiet standing is the WORST case ' + _EN_DASH +
         ' read a difference smaller than about 15 deg as noise.</p>\n'
-        '<p class="note">No per-test segmentation was stored for this '
-        'session: the whole clip was summarised as one block, so these rows '
-        'blend every task recorded in it. Limb and trial are not reported '
-        'because the clip was not split.</p>\n'
+        + _segment_note(summary)
+        + '\n'
         + angle_table
         + '\n<h3>Trunk sway</h3>\n'
         '<p class="note">Trunk-sway ranges are in the pose worker\'s own '
@@ -352,6 +350,24 @@ def _quality(session, summary):
          else '{:.1f} fps'.format(rate)),
         ('Recorded duration', _duration_text(session, summary)),
     ]
+    sync = summary.get('sync') if isinstance(summary, dict) else None
+    sync = sync if isinstance(sync, dict) else {}
+    if sync.get('measured') is True:
+        bits = []
+        if _number_vo(sync.get('offset_ms_estimate')) is not None:
+            bits.append('offset {:.1f} ms'.format(
+                _number_vo(sync.get('offset_ms_estimate'))))
+        if _number_vo(sync.get('jitter_ms_sd')) is not None:
+            bits.append('jitter {:.1f} ms SD'.format(
+                _number_vo(sync.get('jitter_ms_sd'))))
+        sync_text = 'measured (' + ', '.join(bits) + ')' if bits else 'measured'
+    else:
+        note = str(sync.get('note') or '').strip()
+        if 'camera only' in note.lower() or 'no plate' in note.lower():
+            sync_text = 'not measured (camera-only session; no plate stream)'
+        else:
+            sync_text = 'not measured (independent clocks; no hardware genlock)'
+    facts.append(('Camera–plate sync', sync_text))
     rows = [[_td(_esc(label)), _td(value, numeric=True)]
             for label, value in facts]
     table = _table(('Quality field', 'Value'), rows, css='vision-table facts')
@@ -382,7 +398,14 @@ def _audio_block(session, summary):
     share = None if merged is None else plate._speech_share(merged)
     states = [] if merged is None else (merged.get('states') or [])
     excerpts = [] if merged is None else (merged.get('excerpts') or [])
-    flags = {} if merged is None else (merged.get('flag_counts') or {})
+    flags = {}
+    if merged is not None:
+        # C1 follow-up: zero counts are not findings - drop them entirely so
+        # the panel says "no keyword matches" instead of listing every
+        # category as "x0".
+        flags = {label: count
+                 for label, count in (merged.get('flag_counts') or {}).items()
+                 if (_number_vo(count) or 0) > 0}
 
     if merged is None:
         stt_text = _EM_DASH
@@ -413,9 +436,9 @@ def _audio_block(session, summary):
     body = [_table(('Audio field', 'Value'), rows, css='vision-table facts')]
 
     if merged is None:
-        body.append('<p class="note">No audio was recorded for this session '
-                    '(microphone off, audio capture not enabled, or the '
-                    'worker did not report it).</p>')
+        body.append('<p class="note">No audio data is stored for this '
+                    'session (audio was off, the session predates audio '
+                    'support, or the worker did not report it).</p>')
     else:
         body.append('<p class="note">Speech share is the recorded '
                     'speech-active window count divided by the recorded '
@@ -459,6 +482,28 @@ def _audio_block(session, summary):
                     'this session.</p>')
 
     return '\n'.join(body)
+
+
+def _number_vo(value):
+    """Finite float for a report value, else None (module-local helper)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _segment_note(summary):
+    """Honest caption when segments were recorded but none was summarised."""
+    recorded = _number_vo((summary or {}).get('segments_recorded'))
+    if recorded and recorded > 0:
+        return ('<p class="note">Segments were recorded, but none had at '
+                'least 10 frames, so they are not summarised here. Record a '
+                'longer trial per test.</p>')
+    return ('<p class="note">No per-test segmentation was stored for this '
+            'session: the whole clip was summarised as one block, so these '
+            'rows blend every task recorded in it. Limb and trial are not '
+            'reported because the clip was not split.</p>')
 
 
 def _face_payload(summary, session):
