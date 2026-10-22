@@ -115,6 +115,8 @@ class ProtocolReportsTests(unittest.TestCase):
         self.data_dir = Path(self.tmp.name)
         self.app = create_app(data_dir=self.data_dir, auto_connect=False)
         self.acq = self.app.state.acquisition
+        # TEST ONLY: zeroed plate — a protocol session refuses an unverified zero
+        self.acq.zero_verified = True
         self.bridge = StreamingBridge()
         self.acq.bridge = self.bridge
         self.acq.connection = self.bridge.status()

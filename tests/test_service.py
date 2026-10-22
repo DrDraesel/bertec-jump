@@ -53,6 +53,8 @@ class ServiceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.bridge = TestBridge()
         self.s = Acquisition(Path(self.tmp.name), bridge=self.bridge)
+        # TEST ONLY: zeroed plate — protocol sessions/trials refuse an unverified zero
+        self.s.zero_verified = True
         self.addCleanup(self.s.shutdown)
 
     def live_unloaded(self):
@@ -159,6 +161,8 @@ class ProtocolHardwareEventTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.bridge = ProtocolBridge()
         self.s = Acquisition(Path(self.tmp.name), bridge=self.bridge)
+        # TEST ONLY: zeroed plate — protocol sessions/trials refuse an unverified zero
+        self.s.zero_verified = True
         self.addCleanup(self.s.shutdown)
         self.s.connection = self.bridge.status()
         self.frame = 0
@@ -285,6 +289,8 @@ class ProtocolPlateCommandGuardTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.bridge = ProtocolBridge()
         self.s = Acquisition(Path(self.tmp.name), bridge=self.bridge)
+        # TEST ONLY: zeroed plate — protocol sessions/trials refuse an unverified zero
+        self.s.zero_verified = True
         self.addCleanup(self.s.shutdown)
         self.s.connection = self.bridge.status()
         self.frame = 0
@@ -350,6 +356,8 @@ class AtomicPersistenceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.bridge = ProtocolBridge()
         self.s = Acquisition(Path(self.tmp.name), bridge=self.bridge)
+        # TEST ONLY: zeroed plate — protocol sessions/trials refuse an unverified zero
+        self.s.zero_verified = True
         self.addCleanup(self.s.shutdown)
         self.s.connection = self.bridge.status()
         self.frame = 0
@@ -391,6 +399,7 @@ class AtomicPersistenceTests(unittest.TestCase):
 
     def test_protocol_session_writes_leave_no_temp_files_and_parse(self):
         self.s.protocol_start('wbs')
+        self.s.zero_verified = True           # TEST ONLY: zeroed before the battery
         document = json.loads(next(Path(self.tmp.name).rglob('in_progress.json'))
                               .read_text(encoding='utf-8'))
         self.assertEqual(document['quality'], 'in_progress')

@@ -95,6 +95,8 @@ class VisionEventsApiTests(unittest.TestCase):
         self.data_dir = Path(self.tmp.name)
         self.app = create_app(data_dir=self.data_dir, auto_connect=False)
         self.acq = self.app.state.acquisition
+        # TEST ONLY: zeroed plate — a protocol session refuses an unverified zero
+        self.acq.zero_verified = True
         self.vision = StubVision()
         self.acq.vision = self.vision
         self.client = TestClient(self.app, base_url='http://127.0.0.1:8765')
@@ -574,6 +576,7 @@ class VisionEventsApiTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/vision/status').status_code, 200)
 
     def test_session_routes_do_not_change_plate_state(self):
+        self.acq.zero_verified = False        # this test asserts the plate stays unzeroed
         self.start_session('plate untouched')
         snapshot = self.client.get('/api/status').json()
         self.assertEqual(snapshot['connection']['state'], 'disconnected')

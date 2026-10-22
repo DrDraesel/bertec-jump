@@ -131,6 +131,8 @@ class VisionServiceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.bridge = TestBridge()
         self.acq = Acquisition(Path(self.tmp.name), bridge=self.bridge)
+        # TEST ONLY: zeroed plate — a protocol session refuses an unverified zero
+        self.acq.zero_verified = True
         self.addCleanup(self.acq.shutdown)
         self.vision = StubVision()
         self.acq.vision = self.vision

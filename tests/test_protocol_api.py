@@ -91,6 +91,10 @@ class ProtocolApiTests(unittest.TestCase):
         self.data_dir = Path(self.tmp.name)
         self.app = create_app(data_dir=self.data_dir, auto_connect=False)
         self.acq = self.app.state.acquisition
+        # TEST ONLY: a correctly zeroed plate.  begin_trial refuses to start on
+        # an unverified zero (an unzeroed plate offsets every COP value), and
+        # these tests exercise the protocol flow, not the zero ritual.
+        self.acq.zero_verified = True
         self.bridge = StreamingBridge()
         self.acq.bridge = self.bridge
         self.acq.connection = self.bridge.status()
@@ -141,6 +145,9 @@ class ProtocolApiTests(unittest.TestCase):
                          'channels': channels})
 
     def start_session(self, protocol_id='wbs', athlete='TEST ONLY athlete'):
+        # TEST ONLY: the operator zeros the plate before opening a session
+        # (an unverified zero is refused — it offsets every COP value)
+        self.acq.zero_verified = True
         response = self.client.post('/api/protocol/start',
                                     json={'protocol_id': protocol_id, 'athlete': athlete})
         self.assertEqual(response.status_code, 200)
@@ -410,6 +417,29 @@ class ProtocolApiTests(unittest.TestCase):
 
     # -- error paths -------------------------------------------------------
 
+    def test_protocol_session_refuses_an_unzeroed_plate(self):
+        # An unzeroed plate still streams, but its offset (thousands of N on this
+        # unit) puts the COP hundreds of mm from the real one — a session folder
+        # created for it would produce a plausible, wrong sway table.
+        self.acq.zero_verified = False
+        before = self.folders()
+        response = self.client.post('/api/protocol/start', json={'protocol_id': 'wbs'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Zero the completely unloaded plate', response.json()['error'])
+        self.assertEqual(self.folders(), before)          # nothing created
+        self.assertFalse(self.client.get('/api/protocol/state').json()['active'])
+
+    def test_later_trial_refuses_an_unzeroed_plate(self):
+        # a stream break clears the verified zero; the next trial must not start
+        # until the operator zeroes the empty plate again
+        self.start_session('wbs')
+        self.assertEqual(self.client.post('/api/protocol/end_trial').status_code, 200)
+        self.client.post('/api/protocol/discard_trial')
+        self.acq.zero_verified = False
+        response = self.client.post('/api/protocol/begin_trial')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Zero the completely unloaded plate', response.json()['error'])
+
     def test_error_paths(self):
         # no session: bad state -> 400 with the frozen error shape
         for call in (self.client.post('/api/protocol/end_trial'),
@@ -575,6 +605,9 @@ class ProtocolApiTests(unittest.TestCase):
                          ['stream_invalidated'])
         self.assertEqual(self.client.post('/api/protocol/discard_trial').status_code, 200)
         self.assertNotIn('pending', self.client.get('/api/protocol/state').json())
+        # the gap above was a stream break, which clears the verified zero —
+        # the operator re-zeros before the next trial
+        self.acq.zero_verified = True
         # a manual end of a clean trial never produces a pending block
         self.assertEqual(self.client.post('/api/protocol/begin_trial').status_code, 200)
         armed = self.client.get('/api/protocol/state').json()
@@ -689,6 +722,7 @@ class ProtocolApiTests(unittest.TestCase):
     # -- regression smoke of pre-existing endpoints ------------------------
 
     def test_existing_endpoints_still_work(self):
+        self.acq.zero_verified = False        # fresh, unzeroed plate
         snapshot = self.client.get('/api/status').json()
         for key in ('connection', 'safety', 'analysis', 'trace', 'recording', 'sessions',
                     'moments', 'cop', 'zero'):

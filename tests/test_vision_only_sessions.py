@@ -421,6 +421,8 @@ class VisionOnlyServiceTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.acq = Acquisition(Path(self.tmp.name), bridge=TestBridge())
+        # TEST ONLY: zeroed plate — a protocol session refuses an unverified zero
+        self.acq.zero_verified = True
         self.addCleanup(self._cleanup)
         self.vision = StubVision('stopped')
         self.acq.vision = self.vision
@@ -649,6 +651,8 @@ class VisionOnlyAggregateTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.acq = Acquisition(Path(self.tmp.name), bridge=TestBridge())
+        # TEST ONLY: zeroed plate — a protocol session refuses an unverified zero
+        self.acq.zero_verified = True
         self.addCleanup(self.acq.shutdown)
         self.vision = StubVision('running')
         self.acq.vision = self.vision

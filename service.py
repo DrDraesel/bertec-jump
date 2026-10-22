@@ -3051,6 +3051,13 @@ class Acquisition:
                     'A vision-only session is recording; stop it before '
                     'starting a protocol session (one camera cannot serve '
                     'both).')
+            # The first trial is armed by runner.start(), so the zero gate has to
+            # sit here as well: an unzeroed plate offsets every COP value, and a
+            # session folder created for it would produce a plausible, wrong table.
+            if not self.zero_verified:
+                raise RuntimeError('Zero the completely unloaded plate and wait for the '
+                                   'confirmation before starting a protocol session — an '
+                                   'unzeroed plate offsets every COP and weight value')
             protocol = get_protocol(protocol_id)
             session_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')+'_'+uuid.uuid4().hex[:8]
             folder = self.data_dir/'protocols'/session_id
@@ -3077,6 +3084,14 @@ class Acquisition:
     def protocol_begin_trial(self):
         with self.lock:
             session = self._protocol_required()
+            # An unzeroed plate still streams, and its offset (thousands of N on
+            # this unit) puts a bogus COP hundreds of mm away from the real one —
+            # the trial then produces a plausible-looking sway table that is
+            # simply wrong.  Refuse instead of recording it.
+            if not self.zero_verified:
+                raise RuntimeError('Zero the completely unloaded plate and wait for the '
+                                   'confirmation before starting a trial — an unzeroed '
+                                   'plate offsets every COP and weight value')
             self.protocol_pending = None      # NEW-3: the previous pending trial is gone
             session['raw'] = []
             self._vision_trial_reset()

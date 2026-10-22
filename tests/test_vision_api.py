@@ -95,6 +95,8 @@ class VisionApiTests(unittest.TestCase):
         self.data_dir = Path(self.tmp.name)
         self.app = create_app(data_dir=self.data_dir, auto_connect=False)
         self.acq = self.app.state.acquisition
+        # TEST ONLY: zeroed plate (begin_trial now refuses an unverified zero)
+        self.acq.zero_verified = True
         self.vision = StubVision()
         self.acq.vision = self.vision
         self.client = TestClient(self.app, base_url='http://127.0.0.1:8765')

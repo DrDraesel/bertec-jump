@@ -88,6 +88,8 @@ class TrainingApiTests(unittest.TestCase):
         self.data_dir = Path(self.tmp.name)
         self.app = create_app(data_dir=self.data_dir, auto_connect=False)
         self.acq = self.app.state.acquisition
+        # TEST ONLY: zeroed plate — a protocol session refuses an unverified zero
+        self.acq.zero_verified = True
         self.bridge = StreamingBridge()
         self.acq.bridge = self.bridge
         self.acq.connection = self.bridge.status()
@@ -315,6 +317,7 @@ class TrainingApiTests(unittest.TestCase):
     # -- deliverable A: sessions, ingest and persistence -------------------
 
     def test_steadiness_hold_scores_time_in_zone_with_pinned_values(self):
+        self.acq.zero_verified = False        # this test pins zeroed_at_start = False
         state = self.start('steadiness_hold', {'duration_s': None})
         self.assertEqual(state['status'], 'running')
         self.assertEqual(state['target']['direction'], 'center')
