@@ -9,9 +9,18 @@
     if (connection.state === 'streaming') {
       if (!finite(connection.last_sample_age_s)) return 'Waiting for data';
       if (connection.last_sample_age_s > 0.5) return 'Stale data';
-      return recording ? 'Recording' : 'Live';
+      if (recording) return connection.zeroed === true ? 'Recording' : 'Recording (uncalibrated)';
+      return connection.zeroed === true ? 'Live' : 'Live (uncalibrated)';
     }
     return {disconnected: 'Disconnected', searching: 'Searching', waiting: 'Waiting for data', error: 'Device error'}[connection.state] || 'Disconnected';
+  }
+  // A fresh stream is not a measurement: until the zero is verified the
+  // published Fz / COP values carry the plate offset, so the UI must not show
+  // them as measured numbers. Recording readiness additionally requires the
+  // verified zero (see canRecord).
+  function measurementReady(connection = {}) {
+    return connection.state === 'streaming' && connection.zeroed === true
+      && finite(connection.last_sample_age_s) && connection.last_sample_age_s <= 0.5;
   }
   function canRecord(status = {}) {
     const c = status.connection || {};
@@ -42,7 +51,7 @@
     return {csv: base + '/raw.csv', report: base + '/report.json'};
   }
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = {format, statusLabel, metricValues, sessionDownloads, canRecord, weightDetail};
+    module.exports = {format, statusLabel, measurementReady, metricValues, sessionDownloads, canRecord, weightDetail};
   }
   if (typeof document === 'undefined') return;
 
@@ -125,8 +134,10 @@
     const offline = receivedAt > 0 && Date.now() - receivedAt > STALE_MS;
     const label = offline ? 'Service link stale' : statusLabel(c, r.active);
     const live = !offline && c.state === 'streaming' && finite(c.last_sample_age_s) && c.last_sample_age_s <= 0.5;
+    const calibrated = live && measurementReady(c);
+    const uncalibrated = live && !calibrated;
     text('connection-state', label);
-    $('connection-state').dataset.tone = label.includes('error') ? 'error' : label.toLowerCase().includes('stale') ? 'warning' : live ? 'live' : 'neutral';
+    $('connection-state').dataset.tone = label.includes('error') ? 'error' : label.toLowerCase().includes('stale') || label.toLowerCase().includes('uncalibrated') ? 'warning' : calibrated ? 'live' : 'neutral';
     text('connection-message', offline ? 'Status updates stopped. Values are not current; check the local service.' : c.message || 'Connect to discover a local Bertec device.');
     text('sdk-version', c.sdk_version ? `Loaded · ${c.sdk_version}` : 'Not loaded');
     text('sample-age', finite(c.last_sample_age_s) ? `${format(c.last_sample_age_s + (offline ? (Date.now() - receivedAt) / 1000 : 0), 1)} s ago` : '—');
@@ -144,19 +155,19 @@
     text('duration', finite(r.duration_s) ? `${format(r.duration_s, 1)} s` : '—');
     text('sample-count', finite(r.sample_count) ? `${format(r.sample_count)} samples${r.id ? ' · ' + r.id : ''}` : 'No active recording');
     text('phase', a.phase ? a.phase.replaceAll('_', ' ') : 'Awaiting data');
-    text('quality', offline || !live ? 'Signal not current' : a.quality || 'Quality not reported');
+    text('quality', offline || !live ? 'Signal not current' : calibrated ? a.quality || 'Quality not reported' : 'Zero not verified — measured values hidden');
     const values = metricValues(status || {});
     for (const [id, value] of Object.entries(values)) {
-      text(id, format(live ? value : null, ['mass', 'jump-height'].includes(id) ? 1 : 0));
+      text(id, format(calibrated ? value : null, ['mass', 'jump-height'].includes(id) ? 1 : 0));
     }
-    const left = finite(a.left_n), right = finite(a.right_n);
+    const left = calibrated && finite(a.left_n), right = calibrated && finite(a.right_n);
     $('split-loads').hidden = !left && !right;
     $('left-block').hidden = !left;
     $('right-block').hidden = !right;
-    text('weight-detail', weightDetail(a, live, status?.safety?.weight_limit_kg));
+    text('weight-detail', weightDetail(a, calibrated, status?.safety?.weight_limit_kg));
     for (const note of document.querySelectorAll('.jump-note')) note.textContent = status?.safety?.jump_enabled === true ? 'Estimate · valid baseline required' : 'Jump analysis locked';
     if (Array.isArray(status?.sessions)) renderSessions(status.sessions);
-    drawChart(Array.isArray(status?.trace) ? status.trace : [], live);
+    drawChart(Array.isArray(status?.trace) ? status.trace : [], calibrated, uncalibrated);
   }
   function renderSessions(sessions) {
     const signature = JSON.stringify(sessions);
@@ -192,7 +203,7 @@
     catch (error) { reportError(error.message); }
     finally { $('refresh-sessions').disabled = false; }
   }
-  function drawChart(trace, live) {
+  function drawChart(trace, live, uncalibrated = false) {
     const canvas = $('force-chart');
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -201,7 +212,17 @@
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    const points = trace.filter(p => finite(p.t) && finite(p.fz_n));
+    // An unzeroed plate publishes Fz with the plate offset baked in: drawing it
+    // as a force trace would present an artifact as a measurement, so the plot
+    // stays empty until the zero is verified (the API still carries the trace).
+    const points = uncalibrated ? [] : trace.filter(p => finite(p.t) && finite(p.fz_n));
+    const empty = $('chart-empty');
+    const emptyTitle = empty.querySelector('strong');
+    const emptyDetail = empty.querySelector('span');
+    if (emptyTitle && emptyDetail) {
+      emptyTitle.textContent = uncalibrated ? 'Zero not verified' : 'Waiting for a measured signal';
+      emptyDetail.textContent = uncalibrated ? 'Zero the unloaded plate to reveal force over time.' : 'Connect the plate to view force over time.';
+    }
     const left = 52, right = width - 15, top = 23, bottom = height - 33;
     let tMin = points.length ? points[0].t : 0, tMax = points.length ? points[points.length - 1].t : 10;
     if (tMax <= tMin) tMax = tMin + 1;
@@ -218,9 +239,12 @@
       ctx.textAlign = 'center'; ctx.fillText(points.length ? format(tMin + (tMax - tMin) * i / 4, 1) : '—', x, bottom + 20);
     }
     ctx.textAlign = 'left'; ctx.fillStyle = '#a0b2bf'; ctx.fillText('Fz (N)', left, 12);
-    $('chart-empty').hidden = points.length > 0;
-    text('trace-status', points.length ? `${points.length} measured points${live ? ' · live' : ' · historical / not current'}` : 'No trace available');
-    canvas.setAttribute('aria-label', points.length ? `Total vertical force in newtons against time in seconds. ${points.length} measured points. ${live ? 'Live signal.' : 'Historical trace; not current.'}` : 'Total vertical force in newtons against time in seconds. No samples available.');
+    empty.hidden = points.length > 0;
+    text('trace-status', uncalibrated ? 'Zero not verified · force trace hidden until the plate is zeroed'
+      : points.length ? `${points.length} measured points${live ? ' · live' : ' · historical / not current'}` : 'No trace available');
+    canvas.setAttribute('aria-label', uncalibrated
+      ? 'Total vertical force in newtons against time in seconds. Zero has not been verified, so the force trace is not shown as a measurement.'
+      : points.length ? `Total vertical force in newtons against time in seconds. ${points.length} measured points. ${live ? 'Live signal.' : 'Historical trace; not current.'}` : 'Total vertical force in newtons against time in seconds. No samples available.');
     if (!points.length) return;
     ctx.save(); ctx.beginPath(); ctx.rect(left, top, right - left, bottom - top); ctx.clip();
     ctx.strokeStyle = live ? '#61dfcb' : '#748b96'; ctx.lineWidth = 1.7; ctx.beginPath();

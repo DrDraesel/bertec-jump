@@ -6,6 +6,7 @@
     return finite(value) ? value.toFixed(decimals) : '—';
   }
   const COP_GATE_MESSAGE = 'COP: waiting for valid samples (plate unloaded / below 20 N gate)';
+  const COP_ZERO_MESSAGE = 'COP: zero not verified — values hidden until the plate is zeroed';
   const COP_WINDOW_S = 10;
   const STANCE_LABELS = {double: 'double-leg stance', single_left: 'single-leg stance (left leg)',
     single_right: 'single-leg stance (right leg)', neutral_squat: 'neutral squat stance'};
@@ -55,7 +56,11 @@
     const fallRisk = protocol && typeof protocol === 'object' ? protocol.fall_risk : null;
     return riskParts(spotter, fallRisk).join(' · ');
   }
-  function copStatusText(validCount, totalCount) {
+  function copStatusText(validCount, totalCount, zeroed = true) {
+    // An unzeroed plate publishes a COP offset far larger than any sway; the
+    // snapshot keeps the values (never fabricated away) but the UI must not
+    // present them as measurements until zero_verified is true.
+    if (zeroed !== true) return COP_ZERO_MESSAGE;
     if (!finite(validCount) || validCount <= 0) return COP_GATE_MESSAGE;
     const gated = finite(totalCount) ? Math.max(0, totalCount - validCount) : 0;
     const suffix = gated > 0 ? ` · ${format(gated)} below the 20 N gate` : '';
@@ -70,7 +75,20 @@
     const parts = [`Trial ${format(state.trial_index + 1)} of ${format(state.trials_in_condition)}`];
     if (condition && finite(condition.duration_s)) parts.push(`target ${format(condition.duration_s, 0)} s`);
     if (finite(state.elapsed_s)) parts.push(`${format(state.elapsed_s, 1)} s elapsed`);
+    // F1: a trial the duration rule ended explains itself where the operator
+    // already reads progress, before the keep/discard decision.
+    if (state.auto_ended === true) {
+      const auto = autoEndText(state.auto_end);
+      if (auto) parts.push(auto);
+    }
     return parts.join(' · ');
+  }
+  // Wording shared by the progress line and the pending review notice. The
+  // numbers come from the API (runner state / pending block), never invented.
+  function autoEndText(autoEnd) {
+    if (!autoEnd || typeof autoEnd !== 'object') return '';
+    if (!finite(autoEnd.duration_s) || !finite(autoEnd.target_s)) return '';
+    return `ended automatically at ${format(autoEnd.duration_s, 1)} s (target ${format(autoEnd.target_s, 0)} s)`;
   }
   function summaryText(summary) {
     if (!summary || typeof summary !== 'object') return '';
@@ -92,16 +110,18 @@
     const flags = Array.isArray(pending.flags)
       ? pending.flags.filter(flag => typeof flag === 'string' && flag) : [];
     const note = typeof pending.note === 'string' && pending.note.trim() ? pending.note.trim() : '';
-    if (!flags.length && !note) return '';
+    const auto = pending.auto_ended === true ? autoEndText(pending.auto_end) : '';
+    if (!flags.length && !note && !auto) return '';
     const parts = [];
+    if (auto) parts.push(auto);
     if (flags.length) parts.push(`flags: ${flags.join(', ')}`);
     if (note) parts.push(note);
     return `${PENDING_NOTICE_PREFIX} — ${parts.join(' · ')}`;
   }
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {format, statusLabel, buttonState, guidanceLine, protocolRiskText, sessionRiskText,
-      copStatusText, momentText, progressText, summaryText, pendingNotice,
-      PENDING_NOTICE_PREFIX, COP_GATE_MESSAGE, COP_WINDOW_S};
+      copStatusText, momentText, progressText, summaryText, pendingNotice, autoEndText,
+      PENDING_NOTICE_PREFIX, COP_GATE_MESSAGE, COP_ZERO_MESSAGE, COP_WINDOW_S};
   }
   if (typeof document === 'undefined') return;
 
@@ -296,7 +316,7 @@
       renderControls();
     }
   }
-  function drawCop(trace) {
+  function drawCop(trace, zeroed = true) {
     const canvas = $('cop-chart');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -307,12 +327,15 @@
     canvas.height = Math.round(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    const timed = trace.filter(point => point && finite(point.t));
+    // Unverified zero = the COP carries a plate offset of arbitrary size; the
+    // trace stays in the snapshot but is not plotted as a measurement.
+    const timed = zeroed === true ? trace.filter(point => point && finite(point.t)) : [];
     const end = timed.length ? Math.max(...timed.map(point => point.t)) : null;
     const windowed = end === null ? [] : timed.filter(point => point.t >= end - COP_WINDOW_S);
     const points = windowed.filter(point => finite(point.copx_mm) && finite(point.copy_mm));
     const validCount = points.length, totalCount = windowed.length;
-    text('cop-status', copStatusText(validCount, totalCount));
+    const statusText = copStatusText(validCount, totalCount, zeroed);
+    text('cop-status', statusText);
     const plot = {left: 40, top: 26, right: width - 14, bottom: height - 22};
     const cx = (plot.left + plot.right) / 2, cy = (plot.top + plot.bottom) / 2;
     ctx.font = '10px Consolas, monospace';
@@ -337,8 +360,8 @@
     ctx.fillText(`+ML ${format(maxAbs)}`, cx + 6, plot.bottom - 4);
     if (!points.length) {
       ctx.textAlign = 'center';
-      ctx.fillText('Waiting for valid samples (plate unloaded / below 20 N gate)', width / 2, cy - 10);
-      canvas.setAttribute('aria-label', 'Centre of pressure in millimetres. Waiting for valid samples (plate unloaded / below 20 N gate).');
+      ctx.fillText(statusText, width / 2, cy - 10);
+      canvas.setAttribute('aria-label', `Centre of pressure in millimetres. ${statusText}`);
       return;
     }
     ctx.fillStyle = '#61dfcb';
@@ -353,11 +376,15 @@
     if (!snapshot || typeof snapshot !== 'object') return;
     lastSnapshot = snapshot;
     const moments = snapshot.moments && typeof snapshot.moments === 'object' ? snapshot.moments : null;
-    text('moment-mx', moments ? momentText(moments.mx_n) : '—');
-    text('moment-my', moments ? momentText(moments.my_n) : '—');
     const connection = snapshot.connection && typeof snapshot.connection === 'object' ? snapshot.connection : null;
+    // F2: an unzeroed plate publishes Fz/COP with the plate offset; the numbers
+    // are kept in the API (the service still reports them) but every COP/moment
+    // readout is dashed out until the zero is verified.
+    const zeroed = !!(connection && connection.zeroed === true);
+    text('moment-mx', zeroed && moments ? momentText(moments.mx_n) : '—');
+    text('moment-my', zeroed && moments ? momentText(moments.my_n) : '—');
     $('zero-note').hidden = !(connection && connection.zeroed === false);
-    drawCop(Array.isArray(snapshot.trace) ? snapshot.trace : []);
+    drawCop(Array.isArray(snapshot.trace) ? snapshot.trace : [], zeroed);
   }
 
   $('protocol-start').addEventListener('click', () => {
@@ -445,7 +472,10 @@
   const reportsRefresh = $('protocol-reports-refresh');
   if (reportsRefresh) reportsRefresh.addEventListener('click', loadReports);
   window.addEventListener('resize', () => {
-    if (lastSnapshot) drawCop(Array.isArray(lastSnapshot.trace) ? lastSnapshot.trace : []);
+    if (lastSnapshot) {
+      const zeroed = !!(lastSnapshot.connection && lastSnapshot.connection.zeroed === true);
+      drawCop(Array.isArray(lastSnapshot.trace) ? lastSnapshot.trace : [], zeroed);
+    }
   });
   renderControls();
   refreshMessage();

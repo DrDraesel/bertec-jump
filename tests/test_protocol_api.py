@@ -494,25 +494,27 @@ class ProtocolApiTests(unittest.TestCase):
     def test_composed_pipeline_magnitudes_are_pinned(self):
         """H3: the full 10 Hz -> 100 Hz chain must produce pinned magnitudes.
 
-        Same 0.5 Hz / 5 mm COP circle fixture as the QC probe (5 s injection):
-        observed mean velocity 15.6377 mm/s and path 78.03 mm against an
+        Same 0.5 Hz / 5 mm COP circle fixture as the QC probe. The injection is
+        3.2 s, below the 3 s WBS target + 1 s auto-end grace (F1), so the
+        operator's End path - not the duration rule - closes this trial.
+        Observed mean velocity 15.5988 mm/s and path 49.7602 mm against an
         analytic 15.707963 mm/s - the tolerance that separates the real chain
         from a unit or factor error.
         """
         self.start_session('wbs')
-        self.inject(5.0)
+        self.inject(3.2)
         body = self.client.post('/api/protocol/end_trial').json()
         trial = body['trial']
         self.assertEqual(trial['flags'], [])
         metrics = trial['metrics']
-        self.assertEqual(metrics['n_samples'], 500)            # 5000 raw -> 500
-        self.assertAlmostEqual(metrics['duration_s'], 4.99, places=6)
+        self.assertEqual(metrics['n_samples'], 320)            # 3200 raw -> 320
+        self.assertAlmostEqual(metrics['duration_s'], 3.19, places=6)
         self.assertAlmostEqual(metrics['path_length_mm'],
-                               PINNED_PATH_LENGTH_5_S_MM,
-                               delta=PINNED_PATH_LENGTH_5_S_MM * 0.02)
+                               PINNED_PATH_LENGTH_MM,
+                               delta=PINNED_PATH_LENGTH_MM * 0.02)
         self.assertAlmostEqual(metrics['mean_velocity_mm_s'],
-                               PINNED_MEAN_VELOCITY_5_S_MM_S,
-                               delta=PINNED_MEAN_VELOCITY_5_S_MM_S * 0.02)
+                               PINNED_MEAN_VELOCITY_MM_S,
+                               delta=PINNED_MEAN_VELOCITY_MM_S * 0.02)
         # analytic sanity: mean velocity = path / duration = 2*pi*f*r exactly
         self.assertAlmostEqual(metrics['mean_velocity_mm_s'],
                                ANALYTIC_MEAN_VELOCITY_MM_S,
@@ -523,6 +525,40 @@ class ProtocolApiTests(unittest.TestCase):
         # the ellipse sees the same 5 mm circle (25 x pi = 78.54 mm^2 radius-only)
         self.assertGreater(metrics['ellipse95_area_mm2'], 200.0)
         self.assertLess(metrics['ellipse95_area_mm2'], 400.0)
+
+    def test_trial_auto_ends_at_target_plus_grace_and_is_reviewed(self):
+        """F1: a forgotten trial ends itself, is flagged 'overrun', and still
+        waits for the operator's keep / discard decision."""
+        self.start_session('wbs')                 # neutral_0 target: 3.0 s
+        self.inject(4.2)                          # target 3 s + 1 s grace + margin
+        payload = self.client.get('/api/protocol/state').json()
+        self.assertEqual(payload['state']['status'], 'trial_done')
+        self.assertIs(payload['state']['auto_ended'], True)
+        auto = payload['state']['auto_end']
+        self.assertEqual(auto['target_s'], 3.0)
+        self.assertAlmostEqual(auto['duration_s'], 4.0, delta=2e-3)
+        pending = payload['pending']
+        self.assertIs(pending['auto_ended'], True)
+        self.assertIn('overrun', pending['flags'])
+        self.assertEqual(pending['condition_id'], 'neutral_0')
+        self.assertAlmostEqual(pending['auto_end']['duration_s'], 4.0, delta=2e-3)
+        # further samples neither reopen nor extend the finished trial
+        self.inject(0.5)
+        late = self.client.get('/api/protocol/state').json()
+        self.assertEqual(late['state']['status'], 'trial_done')
+        self.assertAlmostEqual(late['state']['auto_end']['duration_s'], 4.0,
+                               delta=2e-3)
+        # manual End on a finished trial is a 400 (bad state), as before
+        self.assertEqual(self.client.post('/api/protocol/end_trial').status_code, 400)
+        kept = self.client.post('/api/protocol/keep_trial')
+        self.assertEqual(kept.status_code, 200)
+        folder = self.folders()[0]
+        trial_doc = json.loads((folder / 'trial_01.json').read_text(encoding='utf-8'))
+        self.assertIn('overrun', trial_doc['flags'])
+        self.assertEqual(trial_doc['auto_end']['target_s'], 3.0)
+        self.assertEqual(trial_doc['n_samples'], 4001)   # 4.0 s at 1 kHz
+        rows = (folder / 'trial_01_raw.csv').read_text(encoding='utf-8').splitlines()
+        self.assertEqual(len(rows), 4002)                # header + the samples
 
     def test_state_exposes_condition_safety_metadata(self):
         # M9: requires_spotter / fall_risk travel with every state() reading.

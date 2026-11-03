@@ -12,9 +12,11 @@ import re
 import unittest
 
 try:
-    from protocols import (DEFAULT_STEP_BASELINE_S, DEFAULT_STEP_DROP_RATIO,
+    from protocols import (AUTO_END_GRACE_S, DEFAULT_STEP_BASELINE_S,
+                           DEFAULT_STEP_DROP_RATIO,
                            DEFAULT_STEP_MIN_DURATION_S, DETECTOR_FLAGS,
-                           FALL_RISK_LEVELS, PROTOCOLS, QUALITY_FLAGS_KEY,
+                           FALL_RISK_LEVELS, OVERRUN_FLAG, PROTOCOLS,
+                           QUALITY_FLAGS_KEY,
                            QUALITY_NOTE_KEY, SHORT_TRIAL_MIN_TARGET_S,
                            SHORT_TRIAL_TOLERANCE_S,
                            Condition, Protocol, SessionRunner,
@@ -22,6 +24,8 @@ try:
                            detector_result_to_flag, get_protocol,
                            protocol_ids, validate_catalog)
 except ImportError:                 # guard mirrors tests/test_analysis.py
+    AUTO_END_GRACE_S = None
+    OVERRUN_FLAG = None
     DETECTOR_FLAGS = None
     FALL_RISK_LEVELS = None
     PROTOCOLS = None
@@ -375,7 +379,7 @@ class SessionFlowTests(RunnerTestBase):
                          {'condition_id', 'condition_index', 'trial_index',
                           'n_samples', 'duration_s', 'flags',
                           'assessable_raw', 'metrics', 'notes', 'kept',
-                          'requires_spotter', 'fall_risk'})
+                          'requires_spotter', 'fall_risk', 'auto_end'})
         self.assertEqual(record['condition_id'], 'neutral_0')
         self.assertEqual(record['condition_index'], 0)
         self.assertEqual(record['trial_index'], 0)
@@ -802,7 +806,8 @@ class NotesStateTests(RunnerTestBase):
         self.assertEqual(set(state),
                          {'status', 'condition_id', 'condition_index',
                           'trial_index', 'trials_in_condition', 'elapsed_s',
-                          'requires_spotter', 'fall_risk'})
+                          'requires_spotter', 'fall_risk',
+                          'auto_ended', 'auto_end'})
         self.assertEqual(state['status'], 'idle')
         self.assertIsNone(state['condition_id'])
         self.assertEqual((state['condition_index'], state['trial_index'],
@@ -810,6 +815,8 @@ class NotesStateTests(RunnerTestBase):
         self.assertEqual(state['elapsed_s'], 0.0)
         self.assertIsNone(state['requires_spotter'])
         self.assertIsNone(state['fall_risk'])
+        self.assertIs(state['auto_ended'], False)
+        self.assertIsNone(state['auto_end'])
 
     def test_state_carries_condition_safety_metadata(self):
         # M9: a live consumer never has to re-join the catalog to know whether
@@ -1173,6 +1180,114 @@ class ShortTrialFlagTests(RunnerTestBase):
         self.assertEqual(record['flags'], [])
         self.assertAlmostEqual(record['duration_s'], 0.99, places=6)
         self.assertTrue(record['assessable_raw'])
+
+
+class AutoEndTests(RunnerTestBase):
+    """F1: a running trial ends itself at condition.duration_s + grace.
+
+    Before this rule only the operator's End control or a stream invalidation
+    ended a trial, so a forgotten trial buffered samples without bound. The
+    auto-end is verified here without hardware: the runner's clock is the
+    sample timestamp stream.
+    """
+
+    def start(self, protocol_id='wbs', **kwargs):
+        runner = SessionRunner(protocol_id, **kwargs)
+        runner.start()
+        return runner
+
+    def test_three_second_condition_ends_just_past_target_and_grace(self):
+        runner = self.start('wbs')                     # neutral_0 target 3.0 s
+        ended = None
+        samples = window(10.0, dt=0.01)                # 10 s offered, 4 s needed
+        for t, fz, copx, copy in samples:
+            record = runner.add_sample(t, fz, copx, copy)
+            if record is not None:
+                ended = record
+                break
+        self.assertIsNotNone(ended, 'the 3 s condition never auto-ended')
+        # Ended at target + AUTO_END_GRACE_S, within one sample of that instant.
+        self.assertAlmostEqual(ended['duration_s'], 4.0, delta=0.01)
+        self.assertGreaterEqual(ended['duration_s'], 3.0)
+        self.assertEqual(runner.state()['status'], 'trial_done')
+        self.assertIn(OVERRUN_FLAG, ended['flags'])
+        self.assertEqual(ended['flags'], [OVERRUN_FLAG])
+        self.assertIsNotNone(ended['auto_end'])
+        self.assertEqual(ended['auto_end']['target_s'], 3.0)
+        self.assertAlmostEqual(ended['auto_end']['grace_s'], AUTO_END_GRACE_S)
+        self.assertAlmostEqual(ended['auto_end']['duration_s'], 4.0, delta=0.01)
+        self.assertAlmostEqual(ended['auto_end']['overrun_s'], 1.0, delta=0.01)
+        state = runner.state()
+        self.assertIs(state['auto_ended'], True)
+        self.assertEqual(state['auto_end']['target_s'], 3.0)
+        # ... and no further sample is accepted until the trial is resolved.
+        with self.assertRaises(RuntimeError):
+            runner.add_sample(20.0, 700.0, 0.0, 0.0)
+
+    def test_zero_grace_ends_within_one_sample_of_the_target(self):
+        runner = self.start('wbs', auto_end_grace_s=0.0)
+        ended = None
+        for t, fz, copx, copy in window(6.0, dt=0.01):
+            record = runner.add_sample(t, fz, copx, copy)
+            if record is not None:
+                ended = record
+                break
+        self.assertIsNotNone(ended)
+        self.assertAlmostEqual(ended['duration_s'], 3.0, delta=0.01)
+        self.assertEqual(ended['auto_end']['grace_s'], 0.0)
+
+    def test_thirty_second_trial_stores_about_thirty_thousand_samples(self):
+        runner = self.start('dl_stance')                # eo_firm target 30 s
+        ended = None
+        for t, fz, copx, copy in window(45.0, dt=0.001):   # 1 kHz, 45 s offered
+            record = runner.add_sample(t, fz, copx, copy)
+            if record is not None:
+                ended = record
+                break
+        self.assertIsNotNone(ended, 'the 30 s condition never auto-ended')
+        self.assertEqual(ended['n_samples'], 31001)     # 30 s target + 1 s grace
+        self.assertAlmostEqual(ended['duration_s'], 31.0, places=6)
+        self.assertIn(OVERRUN_FLAG, ended['flags'])
+        # the buffer is bounded: 45 s were offered, only the target + grace kept
+        self.assertLess(ended['n_samples'], 45000)
+
+    def test_manual_end_is_unchanged_and_not_flagged_overrun(self):
+        runner = self.start('wbs')
+        self.feed(runner, window(2.99, dt=0.01))
+        self.assertEqual(runner.state()['status'], 'running')
+        record = runner.end_trial()
+        self.assertEqual(record['flags'], [])
+        self.assertIsNone(record['auto_end'])
+        self.assertIs(runner.state()['auto_ended'], False)
+        self.assertIsNone(runner.state()['auto_end'])
+
+    def test_trial_is_not_ended_early(self):
+        runner = self.start('dl_stance')                # 30 s target
+        self.feed(runner, window(30.99, dt=0.01))       # just under target+grace
+        self.assertEqual(runner.state()['status'], 'running')
+        self.assertIs(runner.state()['auto_ended'], False)
+
+    def test_auto_ended_trial_still_needs_an_operator_decision(self):
+        runner = self.start('wbs')
+        ended = None
+        for t, fz, copx, copy in window(6.0, dt=0.01):
+            ended = runner.add_sample(t, fz, copx, copy)
+            if ended is not None:
+                break
+        self.assertIsNotNone(ended)
+        # nothing was accepted into the condition record yet
+        self.assertEqual(runner.summary()['neutral_0']['kept_trials'], [])
+        runner.keep_last()
+        self.assertEqual(len(runner.summary()['neutral_0']['kept_trials']), 1)
+        self.assertEqual(runner.summary()['neutral_0']['flag_counts'],
+                         {OVERRUN_FLAG: 1})
+        self.assertEqual(runner.state()['status'], 'ready')
+        self.assertIs(runner.state()['auto_ended'], False)
+
+    def test_grace_must_be_finite_and_non_negative(self):
+        for bad in (-0.1, float('nan'), float('inf')):
+            with self.assertRaises(ValueError):
+                SessionRunner('wbs', auto_end_grace_s=bad)
 
 
 class SummaryMetricKeyTests(RunnerTestBase):

@@ -267,10 +267,12 @@ class ProtocolHardwareEventTests(unittest.TestCase):
     def test_gapped_trial_keeps_its_metrics_but_is_flagged_gapped_data(self):
         # H1 adapter contract: when the COP runs are non-contiguous the adapter
         # attaches gapped_data + a note (count + gap seconds); the flag is what
-        # keeps the trial from reading as a clean continuous record.
-        t = self.feed(3.0)
+        # keeps the trial from reading as a clean continuous record. The feed
+        # stays below the 3 s target + 1 s auto-end grace (F1) so the trial is
+        # closed by the operator, which is what this test exercises.
+        t = self.feed(1.25)
         t = self.feed(1.0, t0=t, with_moments=False)   # COP gated to None -> gap
-        self.feed(3.0, t0=t)
+        self.feed(1.25, t0=t)
         record = self.s.protocol_end_trial()['trial']
         self.assertIsNotNone(GAPPED_DATA_FLAG, 'service.GAPPED_DATA_FLAG missing')
         self.assertEqual(record['flags'], [GAPPED_DATA_FLAG])

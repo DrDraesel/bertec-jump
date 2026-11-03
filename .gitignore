@@ -22,3 +22,6 @@ models/
 Thumbs.db
 .DS_Store
 *.bak
+
+# graphify knowledge graph artifacts
+graphify-out/

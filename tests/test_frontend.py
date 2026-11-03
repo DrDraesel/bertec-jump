@@ -107,11 +107,33 @@ class FrontendContracts(unittest.TestCase):
         assert.equal(ui.statusLabel({state:'disconnected'}), 'Disconnected');
         assert.equal(ui.statusLabel({state:'searching'}), 'Searching');
         assert.equal(ui.statusLabel({state:'waiting',sdk_version:'1'}), 'Waiting for data');
-        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:0.1}), 'Live');
-        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:3}), 'Stale data');
-        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:null}), 'Waiting for data');
+        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:0.1,zeroed:true}), 'Live');
+        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:0.1,zeroed:false}), 'Live (uncalibrated)');
+        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:0.1}), 'Live (uncalibrated)');
+        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:3,zeroed:true}), 'Stale data');
+        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:null,zeroed:true}), 'Waiting for data');
         assert.equal(ui.statusLabel({state:'error'}), 'Device error');
-        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:0},true), 'Recording');
+        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:0,zeroed:true},true), 'Recording');
+        assert.equal(ui.statusLabel({state:'streaming',last_sample_age_s:0},true), 'Recording (uncalibrated)');
+        ''')
+
+    def test_uncalibrated_plate_is_labelled_and_measured_values_hidden(self):
+        # F2: a streaming plate whose zero is not verified must not claim
+        # 'Live', and its Fz / COP readouts must not render as measurements.
+        source = self.source('app.js')
+        self.assertIn('Live (uncalibrated)', source)
+        self.assertIn('measurementReady', source)
+        self.assertIn('format(calibrated ? value : null', source)
+        self.assertIn('uncalibrated', source)
+        self.js('''
+        const fresh={state:'streaming',last_sample_age_s:0.1,zeroed:true};
+        assert.equal(ui.measurementReady(fresh),true);
+        assert.equal(ui.measurementReady({...fresh,zeroed:false}),false);
+        assert.equal(ui.measurementReady({...fresh,zeroed:undefined}),false);
+        assert.equal(ui.measurementReady({...fresh,last_sample_age_s:0.6}),false);
+        assert.equal(ui.measurementReady({...fresh,state:'waiting'}),false);
+        assert.equal(ui.statusLabel({...fresh,zeroed:false}),'Live (uncalibrated)');
+        assert.equal(ui.statusLabel(fresh),'Live');
         ''')
 
     def test_jump_metrics_require_safety_permission(self):

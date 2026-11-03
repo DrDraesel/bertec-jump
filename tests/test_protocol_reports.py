@@ -490,6 +490,129 @@ class ProtocolReportsTests(unittest.TestCase):
         self.assertEqual(report['kept_count'], report['kept_count'])
         self.assertTrue(any('trial_02.json' in note for note in report['artifact_notes']))
 
+    # -- 3b. derived balance roll-ups (F3) ---------------------------------
+
+    def test_derived_asi_and_ratios_appear_in_report_json_and_html(self):
+        """The ASI (with its 16 % flag) and the Romberg / foam ratios are
+        derived from the stored condition means and surfaced in both outputs."""
+        # Asymmetry screen: left 100 mm, right 130 mm -> ASI 26.1 % (>= 16 %).
+        asi_id = '20261016T090000_abcdef21'
+        asi_summary = {
+            'practice_left': {'means': {'path_length_mm': 90.0}},
+            'practice_right': {'means': {'path_length_mm': 95.0}},
+            'scored_left': {'means': {'path_length_mm': 100.0}},
+            'scored_right': {'means': {'path_length_mm': 130.0}},
+        }
+        self.write_stored_session(asi_id, make_session_document(
+            asi_id, 'TEST ONLY asi', [], summary=asi_summary,
+            protocol_id='asymmetry_screen'))
+
+        report = self.report(asi_id).json()['report']
+        block = report['rollups']
+        self.assertIs(block['derived'], True)
+        self.assertIn('derived', block['label'].lower())
+        asi = [entry for entry in block['entries'] if entry['kind'] == 'asymmetry']
+        self.assertEqual(len(asi), 1)
+        entry = asi[0]
+        self.assertAlmostEqual(entry['value'], 3000.0 / 115.0, places=6)  # 26.087 %
+        self.assertAlmostEqual(entry['left_path_mm'], 100.0)
+        self.assertAlmostEqual(entry['right_path_mm'], 130.0)
+        self.assertEqual(entry['threshold_pct'], 16.0)
+        self.assertIs(entry['exceeds_threshold'], True)
+        # ... and it is attached to the condition section it joins
+        left = next(c for c in report['conditions'] if c['condition_id'] == 'scored_left')
+        right = next(c for c in report['conditions'] if c['condition_id'] == 'scored_right')
+        self.assertTrue(any(item['kind'] == 'asymmetry' for item in left['derived']))
+        self.assertTrue(any(item['kind'] == 'asymmetry' for item in right['derived']))
+
+        page = self.client.get('/report/%s' % asi_id).text
+        self.assertIn('Derived roll-ups', page)
+        self.assertIn('ASI 26.1 % (left 100 mm, right 130 mm)', page)
+        self.assertIn('FLAGGED', page)
+
+        # mCTSIB: C1 100, C2 200, C3 150, C4 300 mm path length means.
+        mctsib_id = '20261016T090001_abcdef22'
+        mctsib_summary = {
+            'c1_eo_firm': {'means': {'path_length_mm': 100.0}},
+            'c2_ec_firm': {'means': {'path_length_mm': 200.0}},
+            'c3_eo_foam': {'means': {'path_length_mm': 150.0}},
+            'c4_ec_foam': {'means': {'path_length_mm': 300.0}},
+        }
+        self.write_stored_session(mctsib_id, make_session_document(
+            mctsib_id, 'TEST ONLY mctsib', [], summary=mctsib_summary,
+            protocol_id='mctsib'))
+        report = self.report(mctsib_id).json()['report']
+        ratios = {entry['key']: entry for entry in report['rollups']['entries']
+                  if entry['kind'] == 'ratio'}
+        self.assertAlmostEqual(ratios['romberg_ec_eo_double']['value'], 2.0)
+        self.assertAlmostEqual(ratios['foam_open_double']['value'], 1.5)   # c3/c1
+        self.assertAlmostEqual(ratios['foam_closed_double']['value'], 1.5)  # c4/c2
+        self.assertEqual(ratios['romberg_ec_eo_double']['condition_ids'],
+                         ['c2_ec_firm', 'c1_eo_firm'])
+        self.assertEqual(ratios['foam_closed_double']['condition_ids'],
+                         ['c4_ec_foam', 'c2_ec_firm'])
+        page = self.client.get('/report/%s' % mctsib_id).text
+        self.assertIn('Derived roll-ups', page)
+        self.assertIn('Romberg quotient 2', page)
+        self.assertIn('Foam ÷ firm ratio 1.5', page)
+        c4_start = page.index('<h2>4. ')
+        c4_section = page[c4_start:page.index('</section>', c4_start)]
+        self.assertIn('Foam ÷ firm ratio 1.5', c4_section)
+
+    def test_rollups_are_stored_at_close_and_below_mdc_is_not_a_change(self):
+        """F3 close path: session.json carries one derived rollups block; a
+        same-athlete change smaller than the MDC is reported as not exceeding."""
+        athlete = 'TEST ONLY rollup mdc'
+        previous_id = '20261016T090000_abcdef31'
+        # Previous session of the same athlete/protocol: 12 mm/s mean velocity.
+        self.write_stored_session(previous_id, make_session_document(
+            previous_id, athlete, [],
+            summary={'scored_left': {'means': {'mean_velocity_mm_s': 12.0,
+                                               'path_length_mm': 100.0}},
+                     'scored_right': {'means': {'mean_velocity_mm_s': 12.0,
+                                                'path_length_mm': 100.0}}},
+            protocol_id='asymmetry_screen'))
+        session_id, folder = self.run_full_session(
+            athlete, protocol_id='asymmetry_screen', trial_seconds=2.1)
+        document = json.loads((folder / 'session.json').read_text(encoding='utf-8'))
+        block = document['rollups']
+        self.assertIs(block['derived'], True)
+        self.assertEqual(block['previous_session_id'], previous_id)
+        mdc = [entry for entry in block['entries'] if entry['kind'] == 'mdc']
+        self.assertEqual({entry['condition_ids'][0] for entry in mdc},
+                         {'scored_left', 'scored_right'})
+        for entry in mdc:
+            self.assertEqual(entry['key'], 'sl_mean_velocity_mm_s')
+            self.assertAlmostEqual(entry['baseline'], 12.0)
+            self.assertIs(entry['exceeds_mdc'], False)
+            self.assertLess(abs(entry['change']), entry['mdc'])
+            self.assertIn('not a detected change', entry['text'])
+        asi = [entry for entry in block['entries'] if entry['kind'] == 'asymmetry']
+        self.assertEqual(len(asi), 1)
+        self.assertIn('asi_pct', {entry['key'] for entry in block['entries']})
+
+        # the report exposes the stored block unchanged and prints the MDC line
+        report = self.report(session_id).json()['report']
+        self.assertEqual(report['rollups'], block)
+        page = self.client.get('/report/%s' % session_id).text
+        self.assertIn('Derived roll-ups', page)
+        self.assertIn('below the 9 mm/s MDC', page)
+        self.assertNotIn('EXCEEDS MDC', page)
+
+    def test_mdc_at_or_above_the_threshold_is_flagged(self):
+        import service as service_module
+        means = {'scored_left': {'mean_velocity_mm_s': 100.0}}
+        previous = {'session_id': '20261016T090000_abcdef32',
+                    'completed_at': '2026-10-16T09:05:00+00:00',
+                    'means': {'scored_left': {'mean_velocity_mm_s': 10.0}}}
+        block = service_module.protocol_rollups(means, 'asymmetry_screen',
+                                                previous=previous)
+        entry = next(item for item in block['entries'] if item['kind'] == 'mdc')
+        self.assertIs(entry['exceeds_mdc'], True)
+        self.assertAlmostEqual(entry['change'], 90.0)
+        self.assertIn('at or above the 9 mm/s MDC', entry['text'])
+        self.assertIn('EXCEEDS MDC', service_module._rollup_entry_html(entry))
+
     # -- 4. 404 / traversal behaviour --------------------------------------
 
     def test_report_unknown_or_invalid_identifiers_are_404(self):
@@ -643,12 +766,18 @@ class ProtocolReportsTests(unittest.TestCase):
         def feeder():
             previous = None
             while not stop.is_set():
-                self.inject(0.01)                    # a 10-sample batch per tick
+                batch_start = time.monotonic()
+                self.inject(0.001)                   # 1 ms of device time per tick
                 stamp = time.monotonic()             # stamped after the batch: a
                 if previous is not None:             # blocked ingest shows up here
                     gaps.append(stamp - previous)
                 previous = stamp
-                time.sleep(0.001)                    # hand the GIL back each tick
+                # Pace device time to real time. The old 10 ms/tick feed ran
+                # several times faster than the wall clock and would trip the
+                # 3 s target + 1 s auto-end rule (F1) while the readers work.
+                remaining = 0.002 - (time.monotonic() - batch_start)
+                if remaining > 0:
+                    time.sleep(remaining)
         thread = threading.Thread(target=feeder)
         thread.start()
         try:

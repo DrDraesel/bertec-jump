@@ -1,0 +1,127 @@
+/* ============================================================
+   LAB DESIGN SYSTEM — tokens
+   Source: Instagram reel @_code_and_chill_ (DemI9wBPRce), 2026-11-03
+   Warm editorial analytics: cream canvas, white cards, ink rail,
+   coral accent, tabular numerals, hairline borders, soft shadows.
+   Use for every dashboard in every repo. Override only via tokens.
+   ============================================================ */
+
+:root {
+  /* --- canvas -------------------------------------------------- */
+  --bg: #F7F0E7;
+  --bg-warm: #FBE6D8;
+  --bg-gradient: radial-gradient(1200px 620px at 50% -12%, var(--bg-warm) 0%, var(--bg) 56%, #F4EDE4 100%);
+  --surface: #FFFFFF;
+  --surface-2: #FBF7F1;
+  --surface-3: #F1EBE2;
+  --surface-inset: #ECE6DD;
+
+  /* --- ink ----------------------------------------------------- */
+  --ink: #1A1A1A;
+  --ink-2: #6E6961;
+  --ink-3: #9C968B;
+  --ink-inverse: #F7F2EA;
+
+  /* --- lines --------------------------------------------------- */
+  --line: rgba(26, 26, 26, 0.08);
+  --line-strong: rgba(26, 26, 26, 0.14);
+  --line-dark: rgba(255, 255, 255, 0.08);
+
+  /* --- accent (coral) ------------------------------------------ */
+  --accent: #E8541F;
+  --accent-600: #D24715;
+  --accent-700: #B33A10;
+  --accent-200: #F7C9B2;
+  --accent-100: #FBE2D5;
+  --accent-050: #FDF1EA;
+
+  /* --- semantic ------------------------------------------------ */
+  --ok: #1F7A4B;
+  --ok-bg: #E4F4E8;
+  --warn: #9A5B00;
+  --warn-bg: #FBEEDA;
+  --danger: #C8341C;
+  --danger-bg: #FBE4DF;
+  --info: #2C5C8F;
+  --info-bg: #E6EFF8;
+
+  /* --- channels / series --------------------------------------- */
+  --c-sms: #E8541F;
+  --c-whatsapp: #3FA96A;
+  --c-email: #5B6478;
+  --c-violet: #7C5CFF;
+  --c-teal: #1F8A8A;
+  --c-amber: #C98A12;
+
+  /* --- rail ---------------------------------------------------- */
+  --rail: #161616;
+  --rail-2: #202020;
+  --rail-ink: #A9A39A;
+  --rail-active-bg: #F2EDE6;
+  --rail-active-ink: #161616;
+
+  /* --- radii --------------------------------------------------- */
+  --r-xs: 8px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+
+  /* --- elevation (soft, warm) ---------------------------------- */
+  --sh-1: 0 1px 2px rgba(26, 26, 26, 0.04), 0 8px 24px rgba(26, 26, 26, 0.05);
+  --sh-2: 0 2px 4px rgba(26, 26, 26, 0.05), 0 18px 48px rgba(26, 26, 26, 0.10);
+  --sh-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+  /* --- type ---------------------------------------------------- */
+  --f-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --f-num: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+
+  --fs-display: 34px;
+  --fs-h1: 26px;
+  --fs-h2: 17px;
+  --fs-h3: 15px;
+  --fs-body: 14px;
+  --fs-sm: 12.5px;
+  --fs-xs: 11px;
+
+  --lh-tight: 1.15;
+  --lh-body: 1.5;
+
+  /* --- spacing (4px base) -------------------------------------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-7: 32px;
+  --s-8: 40px;
+  --s-9: 56px;
+
+  /* --- layout -------------------------------------------------- */
+  --rail-w: 72px;
+  --content-max: 1280px;
+  --gap: 16px;
+  --pad-page: 28px;
+
+  /* --- controls ------------------------------------------------ */
+  --ctl-h: 38px;
+  --ctl-h-sm: 32px;
+  --focus: 0 0 0 3px rgba(232, 84, 31, 0.28);
+}
+
+/* Optional dark surface (projector room / kiosk). Not the default. */
+[data-theme="dark"] {
+  --bg: #121212;
+  --surface: #1B1B1B;
+  --surface-2: #202020;
+  --surface-3: #262626;
+  --surface-inset: #2B2B2B;
+  --ink: #F4EFE7;
+  --ink-2: #B9B3A9;
+  --ink-3: #8C867C;
+  --line: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --rail: #0C0C0C;
+}

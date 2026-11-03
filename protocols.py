@@ -41,9 +41,14 @@ Timing model: progress is derived from the sample timestamps handed to
 add_sample (state()['elapsed_s'] = last sample time - first sample time inside
 the current trial), never from wall clock, so runs are deterministic and
 replayable. Timestamps must strictly increase within one trial; each trial
-restarts its own local clock. This module never discovers or approves
-hardware, imports nothing beyond the standard library, and stays independent
-of analysis/metrics modules - a caller injects its own compute_metrics.
+restarts its own local clock. A running trial ends itself once that timestamp
+span reaches the condition's duration_s + AUTO_END_GRACE_S (see add_sample),
+which bounds the sample buffer at a little over the target instead of letting a
+forgotten trial grow without limit; the auto-ended trial is flagged 'overrun'
+and still waits for the operator's keep / discard decision. This module never
+discovers or approves hardware, imports nothing beyond the standard library,
+and stays independent of analysis/metrics modules - a caller injects its own
+compute_metrics.
 
 Safety awareness: every protocol carries a fall_risk level and a safety
 string, and every condition carries requires_spotter. Eyes-closed, foam and
@@ -73,6 +78,7 @@ __all__ = [
     'DEFAULT_STEP_BASELINE_S', 'DEFAULT_STEP_DROP_RATIO',
     'DEFAULT_STEP_MIN_DURATION_S',
     'SHORT_TRIAL_TOLERANCE_S', 'SHORT_TRIAL_MIN_TARGET_S',
+    'AUTO_END_GRACE_S', 'OVERRUN_FLAG',
     'QUALITY_FLAGS_KEY', 'QUALITY_NOTE_KEY',
 ]
 
@@ -115,6 +121,21 @@ SHORT_TRIAL_TOLERANCE_S = 1.0
 # a short ~2-3 s hold: a shorter hold there is captured as-is by the operator
 # (and reported with its real duration), not treated as a protocol deviation.
 SHORT_TRIAL_MIN_TARGET_S = 5.0
+
+# F1: a running trial ends itself once its sample-timestamp duration reaches
+# the condition's target duration_s plus this grace window. Before this rule a
+# trial only ended on the operator's End control or a stream invalidation, so
+# a forgotten trial buffered forever (~1 GB/h at 1 kHz). The grace absorbs
+# sample-arrival latency and the rounding sample (a full 30 s feed at 100 Hz
+# records 29.99 s), so an on-target trial is never cut short at target-1
+# sample; the buffer is bounded at target + grace instead of growing without
+# limit. Configurable per runner (auto_end_grace_s); 0 ends exactly at target.
+AUTO_END_GRACE_S = 1.0
+
+# Quality flag set on a trial record whose end was forced by the duration rule
+# (not the operator's End control and not a stream invalidation). The trial is
+# still 'pending': the operator reviews the flag and keeps or discards it.
+OVERRUN_FLAG = 'overrun'
 
 # Optional keys a compute_metrics callable may use to report data-quality
 # problems it had to work around (the service metrics adapter marks a trial
@@ -719,6 +740,11 @@ class SessionRunner:
         step_baseline_s / step_drop_ratio / step_min_duration_s: thresholds
             of the built-in detector (defaults 1.5 s, 0.5, 0.5 s; documented
             in the module constants). Ignored when a custom detector is given.
+        auto_end_grace_s: seconds past the condition's target duration_s at
+            which the running trial is ended automatically (default
+            AUTO_END_GRACE_S, 1.0 s; 0 ends exactly at target). The automatic
+            end sets OVERRUN_FLAG on the trial and leaves it pending for the
+            operator's keep / discard decision - it never accepts a trial.
 
     Timing: deterministic from sample timestamps (see module docstring).
     All returned dicts are defensive copies; nothing in a returned structure
@@ -728,7 +754,8 @@ class SessionRunner:
     def __init__(self, protocol, compute_metrics=None, weight_loss_detector=None,
                  step_baseline_s=DEFAULT_STEP_BASELINE_S,
                  step_drop_ratio=DEFAULT_STEP_DROP_RATIO,
-                 step_min_duration_s=DEFAULT_STEP_MIN_DURATION_S):
+                 step_min_duration_s=DEFAULT_STEP_MIN_DURATION_S,
+                 auto_end_grace_s=AUTO_END_GRACE_S):
         if isinstance(protocol, str):
             protocol = get_protocol(protocol)
         if not isinstance(protocol, Protocol):
@@ -737,6 +764,8 @@ class SessionRunner:
             raise TypeError('compute_metrics must be callable')
         if weight_loss_detector is not None and not callable(weight_loss_detector):
             raise TypeError('weight_loss_detector must be callable')
+        if not _is_finite_number(auto_end_grace_s) or auto_end_grace_s < 0:
+            raise ValueError('auto_end_grace_s must be a finite number >= 0')
         if weight_loss_detector is None:
             if not _is_finite_number(step_baseline_s) or step_baseline_s <= 0:
                 raise ValueError('step_baseline_s must be a positive number')
@@ -753,6 +782,7 @@ class SessionRunner:
         self.protocol = protocol
         self._compute_metrics = compute_metrics or default_compute_metrics
         self._detector = weight_loss_detector
+        self._auto_end_grace_s = float(auto_end_grace_s)
         self._status = 'idle'
         self._condition_index = 0
         self._trial_index = 0
@@ -762,6 +792,7 @@ class SessionRunner:
         self._copy: List[Optional[float]] = []
         self._kept: Dict[str, List[dict]] = {c.id: [] for c in protocol.conditions}
         self._pending: Optional[dict] = None
+        self._auto_end: Optional[dict] = None
         self._notes = ''
         self._skipped: List[str] = []
 
@@ -783,6 +814,7 @@ class SessionRunner:
         self._fz = []
         self._copx = []
         self._copy = []
+        self._auto_end = None
 
     def state(self) -> dict:
         """Current position: status, condition, trial and trial elapsed time.
@@ -793,6 +825,13 @@ class SessionRunner:
         every reading, so a live consumer that does not re-join the catalog
         still sees the spotter requirement; both are None when no condition is
         current (idle / complete).
+
+        auto_ended / auto_end describe the most recent trial when the duration
+        rule (add_sample) ended it rather than the operator: auto_ended is True
+        and auto_end carries duration_s (the recorded span), target_s (the
+        condition's duration_s), grace_s and overrun_s while the trial waits
+        for keep / discard. Both reset when the next trial is armed, so they
+        never describe a trial other than the one just finished.
         """
         cond = self._current_condition()
         return {
@@ -804,6 +843,8 @@ class SessionRunner:
             'elapsed_s': self._trial_elapsed(),
             'requires_spotter': None if cond is None else cond.requires_spotter,
             'fall_risk': None if cond is None else self.protocol.fall_risk,
+            'auto_ended': self._auto_end is not None,
+            'auto_end': None if self._auto_end is None else dict(self._auto_end),
         }
 
     @property
@@ -834,13 +875,21 @@ class SessionRunner:
         self._pending = None
         self._status = 'running'
 
-    def add_sample(self, t, fz_n, copx_mm, copy_mm) -> None:
+    def add_sample(self, t, fz_n, copx_mm, copy_mm) -> Optional[dict]:
         """Roll one hardware sample into the running trial.
 
         t (s) and fz_n (N) must be finite real numbers. copx_mm / copy_mm may
         be None when the channel is unavailable, otherwise finite. Timestamps
         must strictly increase inside a trial; each trial restarts its own
-        local clock. Returns None (hot path) - read state() for progress.
+        local clock.
+
+        Returns None on the hot path. When this sample brings the trial's
+        sample-timestamp duration to the condition's duration_s plus the
+        runner's auto_end_grace_s, the trial is ended here instead of buffering
+        forever: status becomes 'trial_done', the record carries OVERRUN_FLAG
+        (plus an explanatory note) and, when the sample crossed the threshold,
+        that record is returned. The trial is never auto-kept - it waits for
+        the operator's keep / discard decision exactly like a manual end.
         """
         if self._status != 'running':
             raise RuntimeError("add_sample() requires status 'running' (got %r)"
@@ -859,6 +908,22 @@ class SessionRunner:
         self._fz.append(float(fz_n))
         self._copx.append(None if copx_mm is None else float(copx_mm))
         self._copy.append(None if copy_mm is None else float(copy_mm))
+        cond = self._current_condition()
+        if cond is None:
+            return None
+        target_s = float(cond.duration_s)
+        elapsed_s = self._trial_elapsed()
+        if elapsed_s >= target_s + self._auto_end_grace_s:
+            self._auto_end = {'duration_s': elapsed_s, 'target_s': target_s,
+                              'grace_s': self._auto_end_grace_s,
+                              'overrun_s': elapsed_s - target_s}
+            return self.end_trial(
+                flags=[OVERRUN_FLAG],
+                note=('Trial ended automatically at %.2f s (target %g s): the '
+                      'trial reached its target duration plus the %g s '
+                      'auto-end grace. Review the overrun flag before keeping.'
+                      % (elapsed_s, target_s, self._auto_end_grace_s)))
+        return None
 
     def end_trial(self, flags=None, note=None) -> dict:
         """Close the running trial; compute metrics and detection flags.
@@ -867,9 +932,12 @@ class SessionRunner:
         resolves it. Returns a defensive copy of the trial record:
         {condition_id, condition_index, trial_index, n_samples, duration_s,
          flags, assessable_raw, metrics, notes, kept, requires_spotter,
-         fall_risk}. assessable_raw is True when the trial holds at least one
-        sample (raw data exists); the clinical keep/discard decision always
-        stays with the operator.
+         fall_risk, auto_end}. assessable_raw is True when the trial holds at
+        least one sample (raw data exists); the clinical keep/discard decision
+        always stays with the operator. auto_end is None for an operator- or
+        stream-ended trial and the {duration_s, target_s, grace_s, overrun_s}
+        description when add_sample's duration rule ended it (that path also
+        sets the 'overrun' flag).
 
         Flags/notes are merged from three sources so a compromised trial can
         never read as clean:
@@ -949,6 +1017,8 @@ class SessionRunner:
             'kept': None,
             'requires_spotter': cond.requires_spotter,
             'fall_risk': self.protocol.fall_risk,
+            'auto_end': (None if self._auto_end is None
+                         else dict(self._auto_end)),
         }
         self._pending = record
         self._status = 'trial_done'

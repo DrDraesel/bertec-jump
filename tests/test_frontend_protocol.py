@@ -271,18 +271,29 @@ class ProtocolFrontendSourceContracts(unittest.TestCase):
         assert.equal(ui.protocolRiskText({requires_spotter:false,fall_risk:'low'}),'');
         assert.equal(ui.sessionRiskText({requires_spotter:true},{fall_risk:'moderate'}),'SPOTTER REQUIRED · FALL RISK: MODERATE');
         assert.equal(ui.sessionRiskText({requires_spotter:false},{fall_risk:'low'}),'');
-        assert.equal(ui.copStatusText(0,320),ui.COP_GATE_MESSAGE);
+        assert.equal(ui.copStatusText(0,320,true),ui.COP_GATE_MESSAGE);
         assert.equal(ui.copStatusText(null,null),ui.COP_GATE_MESSAGE);
-        assert.ok(ui.copStatusText(120,320).includes('120 valid samples'));
+        assert.equal(ui.copStatusText(120,320,false),ui.COP_ZERO_MESSAGE);
+        assert.ok(ui.copStatusText(0,0,false).includes('zero not verified'));
+        assert.ok(ui.copStatusText(120,320,true).includes('120 valid samples'));
         assert.ok(ui.copStatusText(120,320).includes('200 below the 20 N gate'));
-        assert.ok(!ui.copStatusText(120,120).includes('below the 20 N gate'));
+        assert.ok(!ui.copStatusText(120,120,true).includes('below the 20 N gate'));
         assert.equal(ui.momentText(null),'—');
         assert.equal(ui.momentText(12.34),'12.3');
         assert.equal(ui.momentText(-5.67),'-5.7');
+        const auto={duration_s:31.04,target_s:30};
+        assert.equal(ui.autoEndText(auto),'ended automatically at 31.0 s (target 30 s)');
+        assert.equal(ui.autoEndText(null),'');
         const progress=ui.progressText({status:'running',trial_index:1,trials_in_condition:3,elapsed_s:12.5},{duration_s:30});
         assert.ok(progress.includes('Trial 2 of 3'));
         assert.ok(progress.includes('target 30 s'));
         assert.ok(progress.includes('12.5 s elapsed'));
+        const ended=ui.progressText({status:'trial_done',trial_index:2,trials_in_condition:3,elapsed_s:31,auto_ended:true,auto_end:auto},{duration_s:30});
+        assert.ok(ended.includes('ended automatically at 31.0 s (target 30 s)'));
+        const notice=ui.pendingNotice({flags:['overrun'],note:'review',auto_ended:true,auto_end:auto});
+        assert.ok(notice.includes('ended automatically at 31.0 s (target 30 s)'));
+        assert.ok(notice.includes('flags: overrun'));
+        assert.ok(!ui.pendingNotice({flags:[],note:'',auto_ended:false}).includes('ended automatically'));
         assert.ok(ui.progressText({status:'complete',trial_index:0,trials_in_condition:0,elapsed_s:0},null).includes('All conditions processed'));
         assert.equal(ui.progressText(null,null),'Trial progress unavailable.');
         assert.ok(ui.summaryText({a:{kept_trials:[1,2]},b:{kept_trials:[3]}}).includes('3 kept trials across 2 conditions'));
@@ -405,7 +416,7 @@ class ProtocolFrontendBrowser(unittest.TestCase):
                 expect(self.page.locator('#zero-note')).to_be_hidden()
         else:
             expect(self.page.locator('#zero-note')).to_be_hidden()
-        expect(self.page.locator('#cop-status')).to_contain_text(re.compile(r'waiting for valid samples|COP live'))
+        expect(self.page.locator('#cop-status')).to_contain_text(re.compile(r'waiting for valid samples|COP live|zero not verified'))
         self.assertEqual(self.errors, [])
 
     def test_degradation_message_when_protocol_api_missing(self):
@@ -664,11 +675,12 @@ class ProtocolFrontendBrowser(unittest.TestCase):
     def test_cop_view_draws_from_snapshot_and_gates(self):
         self.page.add_init_script("window.WebSocket = function () { throw new Error('WebSocket disabled in this test'); };")
         box = {'snapshot': snapshot(cop_trace(60), {'available': True, 'copx_mm': 3.1, 'copy_mm': -1.2},
-                                    {'mx_n': 12.34, 'my_n': -5.6}, zeroed=False)}
+                                    {'mx_n': 12.34, 'my_n': -5.6}, zeroed=True)}
         self.page.route(re.compile(r'/api/status$'), lambda route: route.fulfill(json=box['snapshot']))
         self.mock_catalog()
         self.mock_state({'payload': {'ok': True, 'active': False, 'state': None, 'summary': None}})
         self.goto()
+        expect(self.page.locator('#connection-state')).to_have_text('Live')
         expect(self.page.locator('#cop-status')).to_contain_text('COP live')
         expect(self.page.locator('#cop-status')).to_contain_text('60 valid samples')
         expect(self.page.locator('#moment-mx')).to_have_text('12.3')
@@ -680,14 +692,27 @@ class ProtocolFrontendBrowser(unittest.TestCase):
             " const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;"
             " let n = 0; for (let i = 3; i < d.length; i += 4) { if (d[i] > 0) n += 1; } return n; }")
         self.assertGreater(pixels, 100, 'COP canvas must contain drawn samples')
+        expect(self.page.locator('#zero-note')).to_be_hidden()
+
+        # F2: an unverified zero keeps the snapshot values in the API but the
+        # panel must dash out the moments and refuse to plot COP as a measurement.
+        box['snapshot'] = snapshot(cop_trace(60), {'available': True, 'copx_mm': 3.1, 'copy_mm': -1.2},
+                                   {'mx_n': 12.34, 'my_n': -5.6}, zeroed=False)
+        expect(self.page.locator('#connection-state')).to_have_text('Live (uncalibrated)')
+        expect(self.page.locator('#cop-status')).to_contain_text('zero not verified')
+        expect(self.page.locator('#moment-mx')).to_have_text('—')
+        expect(self.page.locator('#moment-my')).to_have_text('—')
         expect(self.page.locator('#zero-note')).to_be_visible()
+        self.assertIn('zero not verified',
+                      self.page.locator('#cop-chart').get_attribute('aria-label').lower())
 
         box['snapshot'] = snapshot(cop_trace(60, valid=False), {'available': False, 'copx_mm': None, 'copy_mm': None},
-                                   {'mx_n': None, 'my_n': None}, zeroed=False)
+                                   {'mx_n': None, 'my_n': None}, zeroed=True)
         expect(self.page.locator('#cop-status')).to_contain_text('waiting for valid samples')
         expect(self.page.locator('#moment-mx')).to_have_text('—')
         expect(self.page.locator('#moment-my')).to_have_text('—')
-        self.assertIn('Waiting for valid samples', self.page.locator('#cop-chart').get_attribute('aria-label'))
+        self.assertIn('waiting for valid samples',
+                      self.page.locator('#cop-chart').get_attribute('aria-label').lower())
 
         box['snapshot'] = snapshot(cop_trace(60, valid=False), {'available': False, 'copx_mm': None, 'copy_mm': None},
                                    {'mx_n': None, 'my_n': None}, zeroed=True)

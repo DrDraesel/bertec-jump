@@ -16,8 +16,10 @@ import uuid
 
 from analysis import Analyzer
 from bridge import NativeBridge
-from metrics import (PROCESSING_VERSION, cop_from_fz_mx_my, decimate_mean,
-                     lowpass_zero_phase, trial_metrics)
+from metrics import (ASI_FLAG_PCT, MDC_TABLE, PROCESSING_VERSION,
+                     asymmetry_index_pct, change_exceeds_mdc, cop_from_fz_mx_my,
+                     decimate_mean, foam_ratio, lowpass_zero_phase,
+                     romberg_ratio, trial_metrics)
 from protocols import (PROTOCOLS, QUALITY_FLAGS_KEY, QUALITY_NOTE_KEY,
                        SessionRunner, default_weight_loss_detector,
                        get_protocol, protocol_ids)
@@ -986,6 +988,300 @@ def _flag_counts(trials):
     return dict(sorted(counts.items()))
 
 
+# -- derived balance roll-ups (F3) -------------------------------------------
+# metrics.py ships the asymmetry index, the Romberg / foam ratios and the MDC
+# change test, but nothing used to call them. They are applied here to the
+# per-condition MEANS a stored session already carries: derived, labelled
+# values only - never a replacement for the raw trial metrics, and never a
+# diagnosis. Every entry names the conditions it joins so the report can show
+# it in the condition section it belongs to.
+ROLLUPS_LABEL = ('Derived roll-ups (computed from stored condition means; '
+                 'research aid, not a diagnosis)')
+ROLLUPS_NOTE = ('Computed from condition means after the session closed. '
+                'Ratios compare like with like within this session; MDC '
+                'compares the same condition with the same athlete\'s previous '
+                'session of this protocol.')
+# The only MDC_TABLE entry applicable to the stored metrics: single-leg mean
+# COP velocity in mm/s. The mCTSIB entry is COG sway velocity in deg/s, which
+# this plate pipeline does not measure, so it is explicitly NOT applied.
+_SINGLE_LEG_MDC_KEY = 'sl_mean_velocity_mm_s'
+
+
+def _condition_mean(means_by_condition, condition_id, metric):
+    """Finite mean value for (condition_id, metric), or None."""
+    entry = means_by_condition.get(condition_id)
+    if not isinstance(entry, dict):
+        return None
+    return _finite_number(entry.get(metric))
+
+
+def _stored_summary_means(document):
+    """{condition_id: {metric: mean}} from a stored session document."""
+    summary = document.get('summary') if isinstance(document.get('summary'), dict) else {}
+    means = {}
+    for condition_id, entry in summary.items():
+        if isinstance(entry, dict) and isinstance(entry.get('means'), dict):
+            means[condition_id] = dict(entry['means'])
+    return means
+
+
+def _catalog_conditions(protocol_id):
+    """Ordered catalog conditions for protocol_id ([] when unknown)."""
+    protocol = _protocol_catalog_protocol(protocol_id)
+    conditions = protocol.get('conditions') if isinstance(protocol, dict) else None
+    return [condition for condition in conditions or [] if isinstance(condition, dict)]
+
+
+def _condition_text(condition):
+    """Human condition label for roll-up text: label or id."""
+    return (_first_nonempty_text(condition.get('label'))
+            or str(condition.get('id') or 'condition'))
+
+
+def protocol_rollups(means_by_condition, protocol_id, previous=None):
+    """Apply metrics.py's balance roll-ups to one session's condition means.
+
+    Args:
+        means_by_condition: {condition_id: {metric: mean}} from the session
+            summary (the same numbers the report prints per condition).
+        protocol_id: catalog id of the session's protocol.
+        previous: optional {'session_id', 'completed_at', 'means'} of the same
+            athlete's previous session of this protocol, for the MDC change
+            test; None means no previous session is available.
+
+    Returns a JSON-ready block:
+        {'derived': True, 'label': ..., 'note': ..., 'protocol_id': ...,
+         'previous_session_id': ..., 'previous_completed_at': ...,
+         'entries': [entry, ...], 'not_applied': [...]}
+
+    Each entry carries 'kind' ('asymmetry' | 'ratio' | 'mdc'), 'key',
+    'condition_ids', the numeric inputs it was derived from and a ready-to-
+    print 'text'. ASI applies the published 16 % screening flag; ratios are
+    only built where both conditions exist in the catalog and both store the
+    metric; MDC is only applied where the athlete's previous session stores
+    the same condition/metric. Nothing is invented: an absent input produces
+    no entry.
+    """
+    means = means_by_condition if isinstance(means_by_condition, dict) else {}
+    conditions = _catalog_conditions(protocol_id)
+    by_id = {condition.get('id'): condition for condition in conditions}
+    entries = []
+
+    # 1) Asymmetry index (sequential single-leg screen): scored left vs right
+    #    total path length, flagged at the published >= 16 % threshold.
+    if 'scored_left' in by_id and 'scored_right' in by_id:
+        left = _condition_mean(means, 'scored_left', 'path_length_mm')
+        right = _condition_mean(means, 'scored_right', 'path_length_mm')
+        asi = asymmetry_index_pct(left, right)
+        if asi is not None:
+            flagged = asi >= ASI_FLAG_PCT
+            entries.append({
+                'kind': 'asymmetry', 'key': 'asi_pct',
+                'label': 'Asymmetry index (ASI), scored left vs right path length',
+                'condition_ids': ['scored_left', 'scored_right'],
+                'metric': 'path_length_mm', 'unit': '%',
+                'value': asi, 'left_path_mm': left, 'right_path_mm': right,
+                'threshold_pct': ASI_FLAG_PCT, 'exceeds_threshold': flagged,
+                'text': ('ASI %s %% (left %s mm, right %s mm) — %s the %s %% '
+                         'screening threshold.'
+                         % (_display_number(asi, 1), _display_number(left, 1),
+                            _display_number(right, 1),
+                            'at or above' if flagged else 'below',
+                            _display_number(ASI_FLAG_PCT, 0))),
+            })
+
+    # 2) Romberg quotient: eyes-closed firm over eyes-open firm, same stance.
+    #    3) Foam ratio: foam over firm, same eyes state and stance (mCTSIB
+    #    C3/C1 and C4/C2 when the catalog is mCTSIB).
+    for condition in conditions:
+        surface = _first_nonempty_text(condition.get('surface'))
+        eyes = _first_nonempty_text(condition.get('eyes'))
+        stance = _first_nonempty_text(condition.get('stance'))
+        condition_id = condition.get('id')
+        if surface == 'firm' and eyes == 'closed':
+            reference = next((candidate for candidate in conditions
+                              if candidate.get('surface') == 'firm'
+                              and candidate.get('eyes') == 'open'
+                              and candidate.get('stance') == stance), None)
+            if reference is not None:
+                numerator = _condition_mean(means, condition_id, 'path_length_mm')
+                denominator = _condition_mean(means, reference.get('id'),
+                                              'path_length_mm')
+                value = romberg_ratio(numerator, denominator)
+                if value is not None:
+                    entries.append({
+                        'kind': 'ratio', 'key': 'romberg_ec_eo_%s' % stance,
+                        'label': 'Romberg quotient (eyes closed ÷ eyes open), %s'
+                                 % str(stance).replace('_', ' '),
+                        'condition_ids': [condition_id, reference.get('id')],
+                        'metric': 'path_length_mm', 'unit': 'ratio',
+                        'value': value,
+                        'numerator_condition_id': condition_id,
+                        'numerator_value': numerator,
+                        'denominator_condition_id': reference.get('id'),
+                        'denominator_value': denominator,
+                        'text': ('Romberg quotient %s (%s %s mm ÷ %s %s mm). '
+                                 'Healthy quiet-stance EC/EO is approximately '
+                                 '2-2.5; a ratio at or below 1 ("postural '
+                                 'blindness") warrants review. Research '
+                                 'reference only.'
+                                 % (_display_number(value, 2),
+                                    _condition_text(condition),
+                                    _display_number(numerator, 1),
+                                    _condition_text(reference),
+                                    _display_number(denominator, 1))),
+                    })
+        if surface == 'foam':
+            reference = next((candidate for candidate in conditions
+                              if candidate.get('surface') == 'firm'
+                              and candidate.get('eyes') == eyes
+                              and candidate.get('stance') == stance), None)
+            if reference is not None:
+                numerator = _condition_mean(means, condition_id, 'path_length_mm')
+                denominator = _condition_mean(means, reference.get('id'),
+                                              'path_length_mm')
+                value = foam_ratio(numerator, denominator)
+                if value is not None:
+                    entries.append({
+                        'kind': 'ratio', 'key': 'foam_%s_%s' % (eyes, stance),
+                        'label': 'Foam ÷ firm ratio (eyes %s), %s'
+                                 % (eyes or 'not reported',
+                                    str(stance).replace('_', ' ')),
+                        'condition_ids': [condition_id, reference.get('id')],
+                        'metric': 'path_length_mm', 'unit': 'ratio',
+                        'value': value,
+                        'numerator_condition_id': condition_id,
+                        'numerator_value': numerator,
+                        'denominator_condition_id': reference.get('id'),
+                        'denominator_value': denominator,
+                        'text': ('Foam ÷ firm ratio %s (%s %s mm ÷ %s %s mm); '
+                                 'separates peripheral vestibulopathy from '
+                                 'somatosensory ataxia where the classic '
+                                 'Romberg quotient cannot. Research reference '
+                                 'only.'
+                                 % (_display_number(value, 2),
+                                    _condition_text(condition),
+                                    _display_number(numerator, 1),
+                                    _condition_text(reference),
+                                    _display_number(denominator, 1))),
+                    })
+
+    # 4) MDC change flags versus the same athlete's previous session. Only the
+    #    single-leg mean COP velocity entry is applicable to these metrics.
+    previous = previous if isinstance(previous, dict) else {}
+    previous_means = (previous.get('means')
+                      if isinstance(previous.get('means'), dict) else None)
+    if previous_means is not None:
+        mdc_value = MDC_TABLE.get(_SINGLE_LEG_MDC_KEY)
+        for condition in conditions:
+            stance = _first_nonempty_text(condition.get('stance')) or ''
+            if not stance.startswith('single_'):
+                continue
+            condition_id = condition.get('id')
+            current = _condition_mean(means, condition_id,
+                                      'mean_velocity_mm_s')
+            baseline = _condition_mean(previous_means, condition_id,
+                                       'mean_velocity_mm_s')
+            exceeds = change_exceeds_mdc(_SINGLE_LEG_MDC_KEY, baseline, current)
+            if exceeds is None or current is None or baseline is None:
+                continue
+            change = current - baseline
+            previous_label = _first_nonempty_text(previous.get('session_id')) or 'previous session'
+            entries.append({
+                'kind': 'mdc', 'key': _SINGLE_LEG_MDC_KEY,
+                'label': ('Change vs previous session — mean COP velocity, %s'
+                          % _condition_text(condition)),
+                'condition_ids': [condition_id],
+                'metric': 'mean_velocity_mm_s', 'unit': 'mm/s',
+                'baseline': baseline, 'current': current, 'change': change,
+                'mdc': mdc_value, 'exceeds_mdc': bool(exceeds),
+                'previous_session_id': previous_label,
+                'previous_completed_at': _first_nonempty_text(
+                    previous.get('completed_at')),
+                'text': ('change %s mm/s (previous %s mm/s → current %s mm/s) '
+                         'is %s the %s mm/s MDC for single-leg mean COP '
+                         'velocity (%s) — %s.'
+                         % (_display_number(change, 2),
+                            _display_number(baseline, 2),
+                            _display_number(current, 2),
+                            'at or above' if exceeds else 'below',
+                            _display_number(mdc_value, 1),
+                            previous_label,
+                            'a change beyond measurement error'
+                            if exceeds else 'not a detected change')),
+            })
+    return {
+        'derived': True,
+        'label': ROLLUPS_LABEL,
+        'note': ROLLUPS_NOTE,
+        'protocol_id': _first_nonempty_text(protocol_id),
+        'previous_session_id': (_first_nonempty_text(previous.get('session_id'))
+                                if isinstance(previous, dict) else None),
+        'previous_completed_at': (_first_nonempty_text(previous.get('completed_at'))
+                                  if isinstance(previous, dict) else None),
+        'entries': entries,
+        'not_applied': [{
+            'key': 'mctsib_foam_ec_sway_velocity_deg_s',
+            'reason': ('COG sway velocity in deg/s is not measured by this '
+                       'plate pipeline; stored metrics are COP distance and '
+                       'velocity in mm and mm/s.'),
+        }],
+    }
+
+
+def _previous_protocol_means(root, athlete, protocol_id, exclude_id=None):
+    """Newest stored session of the same athlete + protocol (means only).
+
+    Returns {'session_id', 'completed_at', 'means': {condition_id: {metric:
+    mean}}} or None when the athlete name is blank (anonymous sessions are not
+    cross-compared) or no earlier stored session carries summary means. The MDC
+    comparison must be same-athlete / same-protocol / same-condition, so
+    anything else is skipped rather than approximated.
+    """
+    target = str(athlete or '').strip().casefold()
+    protocol = _first_nonempty_text(protocol_id)
+    if not target or protocol is None:
+        return None
+    candidates = []
+    for folder, document in _protocol_stored_sessions(root):
+        stored_athlete = _first_nonempty_text(document.get('athlete')) or ''
+        if stored_athlete.strip().casefold() != target:
+            continue
+        if _first_nonempty_text(document.get('protocol_id')) != protocol:
+            continue
+        session_id = _first_nonempty_text(document.get('id')) or folder.name
+        if exclude_id is not None and session_id == exclude_id:
+            continue
+        means = _stored_summary_means(document)
+        if not means:
+            continue
+        stamp = (_first_nonempty_text(document.get('completed_at'),
+                                      document.get('started_at')) or '')
+        candidates.append((stamp, session_id, document))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    _, session_id, document = candidates[-1]
+    return {'session_id': session_id,
+            'completed_at': _first_nonempty_text(document.get('completed_at')),
+            'means': _stored_summary_means(document)}
+
+
+def _rollup_entry_html(entry):
+    """One print-ready line for a derived roll-up entry (escaped)."""
+    if not isinstance(entry, dict):
+        return ''
+    text = _first_nonempty_text(entry.get('text'))
+    if text is None:
+        return ''
+    flag = ''
+    if entry.get('kind') == 'asymmetry' and entry.get('exceeds_threshold') is True:
+        flag = ' <strong class="warn">FLAGGED</strong>'
+    elif entry.get('kind') == 'mdc' and entry.get('exceeds_mdc') is True:
+        flag = ' <strong class="warn">EXCEEDS MDC</strong>'
+    return _esc(text) + flag
+
+
 def _protocol_condition_rollups(folder, document):
     """Ordered condition rollups for one stored session (report builder org).
 
@@ -1153,6 +1449,28 @@ def build_protocol_report(root, session_id, folder=None):
     rollups, views, session_version = _protocol_condition_rollups(folder, document)
     protocol = _protocol_catalog_protocol(document.get('protocol_id'))
 
+    # F3: the derived roll-up block written at close when present; otherwise
+    # derive from the stored condition means (older sessions; no previous-
+    # session MDC in that case because the comparison was not stored).
+    derived_rollups = document.get('rollups')
+    if not (isinstance(derived_rollups, dict)
+            and derived_rollups.get('derived') is True):
+        # Older sessions predate the stored block: derive from the condition
+        # means this report already shows (stored summary or recomputed from
+        # the kept trials). No previous-session MDC in that case, because the
+        # comparison was not stored and must not be guessed.
+        derived_rollups = protocol_rollups(
+            {rollup['condition_id']: rollup.get('means') or {}
+             for rollup in rollups},
+            document.get('protocol_id'))
+    derived_entries = [entry for entry in derived_rollups.get('entries') or []
+                       if isinstance(entry, dict)]
+    for rollup in rollups:
+        relevant = [dict(entry) for entry in derived_entries
+                    if rollup['condition_id'] in (entry.get('condition_ids') or [])]
+        if relevant:
+            rollup['derived'] = relevant
+
     artifact_notes = []
     index = document.get('kept_trials')
     if (not isinstance(index, list) or not index) and views:
@@ -1184,6 +1502,7 @@ def build_protocol_report(root, session_id, folder=None):
         'report_format_version': REPORT_FORMAT_VERSION,
         'kept_count': len(views),
         'conditions': rollups,
+        'rollups': derived_rollups,
         'trial_notes': trial_notes,
         'flag_counts': _flag_counts([trial for rollup in rollups for trial in rollup['trials']]),
         'artifact_incomplete': bool(artifact_notes),
@@ -1346,6 +1665,17 @@ def _report_condition_section(position, condition):
     if flags:
         flag_parts = ['%s ×%s' % (_esc(flag), _esc(count)) for flag, count in sorted(flags.items())]
         parts.append('<p class="flags">Flagged trials: %s.</p>' % ' · '.join(flag_parts))
+
+    # F3: derived roll-ups belong to the condition(s) they join, so they print
+    # under the condition section rather than in a detached appendix.
+    derived = condition.get('derived') if isinstance(condition.get('derived'), list) else []
+    derived_items = [item for item in (_rollup_entry_html(entry) for entry in derived)
+                     if item]
+    if derived_items:
+        parts.append('<div class="derived"><h3>Derived roll-ups</h3>'
+                     '<p class="sub">Computed from the condition means above '
+                     '(research aid, not a diagnosis).</p><ul>%s</ul></div>'
+                     % ''.join('<li>%s</li>' % item for item in derived_items))
 
     if not trials:
         parts.append('<p class="skip">No kept trials for this condition (skipped or not completed).</p>')
@@ -2697,6 +3027,30 @@ class Acquisition:
             self.zero_settling_until = time.monotonic()+5
         return self.snapshot()
 
+    def _set_protocol_pending(self, record, fallback_note=None):
+        """Publish a just-finished trial's review block for /api/protocol/state.
+
+        NEW-3 shape (flags, note, condition_id, trial_index) plus the F1
+        auto-end evidence: auto_ended is True and auto_end carries
+        {duration_s, target_s, grace_s, overrun_s} when the runner's duration
+        rule (not the operator, not a stream event) ended the trial, so the
+        keep/discard decision is made with the overrun in view.
+        """
+        auto = record.get('auto_end') if isinstance(record, dict) else None
+        auto = dict(auto) if isinstance(auto, dict) else None
+        pending = {
+            'flags': [str(flag) for flag in record.get('flags') or []],
+            'note': (_first_nonempty_text(record.get('notes'))
+                     or _first_nonempty_text(fallback_note)),
+            'condition_id': _first_nonempty_text(record.get('condition_id')),
+            'trial_index': _first_number(record.get('trial_index')),
+            'auto_ended': auto is not None,
+        }
+        if auto is not None:
+            pending['auto_end'] = auto
+        self.protocol_pending = pending
+        return pending
+
     def _invalidate_protocol_trial(self, reason):
         """End a running protocol trial when the hardware stream breaks (H1).
 
@@ -2747,12 +3101,8 @@ class Acquisition:
                 self._attach_vision_to_record(record)
             except Exception:
                 pass
-            self.protocol_pending = {
-                'flags': [str(flag) for flag in record.get('flags') or []],
-                'note': _first_nonempty_text(record.get('notes')) or STREAM_INVALIDATED_NOTE,
-                'condition_id': _first_nonempty_text(record.get('condition_id')),
-                'trial_index': _first_number(record.get('trial_index')),
-            }
+            self._set_protocol_pending(record,
+                                       fallback_note=STREAM_INVALIDATED_NOTE)
         return record
 
     def _invalidate_training_session(self, reason):
@@ -2862,11 +3212,23 @@ class Acquisition:
                 # reconnect) is dropped here rather than corrupting the trial or
                 # breaking the acquisition loop.
                 try:
-                    session['runner'].add_sample(t, fz, copx_mm, copy_mm)
+                    auto_record = session['runner'].add_sample(t, fz, copx_mm, copy_mm)
                 except (RuntimeError, ValueError):
                     pass
                 else:
                     session['raw'].append((t, fz, mx_n, my_n, copx_mm, copy_mm))
+                    if auto_record is not None:
+                        # F1: the runner's duration rule ended the trial inside
+                        # the sample path (target + grace reached). The buffered
+                        # pre-end samples stay for the keep/discard decision and
+                        # the review block carries the overrun evidence, so the
+                        # operator never keeps an auto-ended trial blindly.
+                        try:
+                            self._attach_cop_com(auto_record)
+                            self._attach_vision_to_record(auto_record)
+                        except Exception:
+                            pass
+                        self._set_protocol_pending(auto_record)
             self._feed_training(t, fz, copx_mm, copy_mm)
             if self.record:
                 if self.record['first_t'] is None:
@@ -3146,6 +3508,9 @@ class Acquisition:
                                     'n_samples': kept['n_samples'],
                                     'duration_s': kept['duration_s'],
                                     'flags': kept['flags'],
+                                    # F1: an auto-ended trial is visible as such in
+                                    # the session index, not only in its trial JSON.
+                                    'auto_ended': kept.get('auto_end') is not None,
                                     # Safety metadata travels with the persisted condition
                                     # entry so a stored session never loses the spotter
                                     # requirement (readers need no catalog re-join).
@@ -3214,7 +3579,19 @@ class Acquisition:
         the given reason (application close), else 'complete' once the runner
         reached 'complete', else 'incomplete' - an unfinished or unresolved
         trial is discarded, never persisted.
+
+        F3: session.json carries one 'rollups' block of derived values (ASI,
+        Romberg / foam ratios, MDC change flags versus the same athlete's
+        previous session of this protocol). The previous-session lookup runs
+        before the acquisition lock is taken: scanning stored session folders
+        must never stall the sample path (NEW-1).
         """
+        session = self.protocol_session
+        previous = None
+        if session is not None:
+            previous = _previous_protocol_means(
+                self.data_dir/'protocols', session['athlete'],
+                session['protocol_id'], exclude_id=session['id'])
         with self.lock:
             session = self._protocol_required()
             runner = session['runner']
@@ -3229,6 +3606,12 @@ class Acquisition:
                         'completed_at': datetime.now(timezone.utc).isoformat(),
                         'quality': reason or ('complete' if status == 'complete' else 'incomplete'),
                         'runner_status': status, 'kept_trials': session['kept'], 'summary': summary,
+                        # F3: derived roll-ups, labelled as derived inside the block.
+                        'rollups': protocol_rollups(
+                            {condition_id: entry.get('means', {})
+                             for condition_id, entry in summary.items()
+                             if isinstance(entry, dict)},
+                            session['protocol_id'], previous=previous),
                         'safety': {'message': SAFETY_NOTE, 'weight_limit_kg': WEIGHT_LIMIT_KG},
                         'methodology': {
                             'cop': 'COPx = -My/Fz, COPy = +Mx/Fz in mm (Bertec 80P-0165 example '

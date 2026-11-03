@@ -1,0 +1,96 @@
+/* Bertec bridge — maps the existing instrument UI onto the lab design system.
+   styles.css defines colour variables in :root; this file is loaded after it,
+   so re-declaring them here re-themes every rule that uses them. */
+
+:root {
+  color-scheme: light;
+  --bg: #F7F0E7;
+  --panel: #FFFFFF;
+  --surface: #FBF7F1;
+  --ink: #1A1A1A;
+  --muted: #6E6961;
+  --line: #E9E2D8;
+  --teal: #E8541F;          /* accent: coral replaces teal */
+  --amber: #9A5B00;
+  --danger: #C8341C;
+  --lab-soft: #F1EBE2;
+  --lab-accent-100: #FBE2D5;
+  --lab-ok: #1F7A4B;
+  --lab-ok-bg: #E4F4E8;
+  --lab-warn-bg: #FBEEDA;
+  --lab-bad-bg: #FBE4DF;
+  font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", Arial, sans-serif;
+}
+
+body {
+  background: radial-gradient(1200px 620px at 50% -12%, #FBE6D8 0%, #F7F0E7 56%, #F4EDE4 100%) fixed;
+  color: var(--ink);
+}
+
+/* chrome */
+.topbar { border-bottom: 1px solid var(--line); background: rgba(255,255,255,.55); backdrop-filter: blur(6px); }
+.brand-mark { background: var(--teal); color: #fff; border-radius: 12px; padding: 8px 10px; }
+.brand-sub, .local-badge { color: var(--muted); }
+main { max-width: 1560px; }
+
+/* panels & cards */
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+  box-shadow: 0 1px 2px rgba(26,26,26,.04), 0 8px 24px rgba(26,26,26,.05);
+  padding: 20px;
+}
+.section-heading h2 { font-size: 15px; font-weight: 600; }
+.eyebrow, .step { font-family: inherit; color: var(--muted); letter-spacing: .02em; }
+
+/* state pill */
+.state-pill {
+  background: #fff; border: 1px solid var(--line); border-radius: 999px;
+  font-family: inherit; font-weight: 600; font-size: 12px; padding: 8px 14px;
+}
+.state-pill[data-tone="live"] { color: var(--lab-ok); background: var(--lab-ok-bg); border-color: transparent; }
+.state-pill[data-tone="warning"] { color: var(--amber); background: var(--lab-warn-bg); border-color: transparent; }
+.state-pill[data-tone="error"] { color: var(--danger); background: var(--lab-bad-bg); border-color: transparent; }
+
+/* controls */
+button {
+  background: #fff; border: 1px solid #D9D1C5; border-radius: 12px;
+  color: var(--ink); font-weight: 500; min-height: 42px;
+}
+button:hover:not(:disabled) { background: var(--surface); border-color: var(--ink); }
+button.primary { background: var(--teal); border-color: var(--teal); color: #fff; }
+button.primary:hover:not(:disabled) { background: #D24715; border-color: #D24715; }
+button:disabled { opacity: .45; }
+.stop:not(:disabled) { color: var(--danger); border-color: var(--danger); background: #fff; }
+input[type="text"], input[type="number"], select {
+  background: #fff; border: 1px solid #D9D1C5; border-radius: 12px; color: var(--ink);
+  min-height: 42px; padding: 10px 12px;
+}
+input:focus, select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(232,84,31,.2); }
+.check-label input { accent-color: var(--teal); }
+
+/* the hero force value + metrics */
+.hero-value strong { font-family: inherit; font-weight: 600; letter-spacing: -.03em; color: var(--ink); font-variant-numeric: tabular-nums; }
+.metric strong, .split-loads strong, .record-clock strong, .cop-moments strong,
+.vision-metrics strong { font-family: inherit; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
+.metric h3 { color: var(--muted); font-weight: 500; }
+.metric { border-radius: 16px; }
+.metric-label, .chart-footer, footer, .legend { font-family: inherit; }
+.chart-wrap, .cop-wrap, .vision-feed-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+
+/* guarded / risk */
+.guarded { background: var(--lab-warn-bg); border-radius: 14px; }
+.risk-badge { border-radius: 12px; background: var(--lab-warn-bg); color: var(--amber); border-color: transparent; }
+.risk-badge[data-tone="high"] { background: var(--lab-bad-bg); color: var(--danger); }
+
+/* tabs */
+.tabbar { border-bottom: 1px solid var(--line); }
+.tab-button { border-radius: 999px; padding: 8px 16px; color: var(--muted); }
+.tab-button.is-active { background: #fff; border-color: var(--line); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.tab-button[aria-selected="true"] { color: var(--teal); }
+
+/* tables, sessions, devices */
+.session { border-top: 1px solid var(--line); }
+.devices li { background: var(--surface); border-radius: 10px; }
+.error { background: var(--lab-bad-bg); border-color: transparent; color: var(--danger); border-radius: 12px; }
+.vision-metrics > div { background: var(--surface); border-color: var(--line); border-radius: 12px; }
+.skip-link { background: #fff; }
