@@ -7,6 +7,8 @@
   "vision": {
     "enabled": false,
     "auto_start": false,
+    "restart": false,
+    "max_retries": 2,
     "interpreter": "",
     "port": 8791,
     "proc_width": 960,
